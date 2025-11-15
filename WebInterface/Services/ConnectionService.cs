@@ -1,163 +1,126 @@
 ﻿using Microsoft.AspNetCore.SignalR;
 using RemotePCControl.WebInterface.Hubs;
-using System.Collections.Concurrent;
 using System.Net.Sockets;
 using System.Text;
 
 namespace RemotePCControl.WebInterface.Services
 {
-    public class ConnectionService : IDisposable
+    public class ConnectionService
     {
-        // Dùng IHubContext để Hub có thể gửi tin nhắn BẤT KỲ LÚC NÀO
         private readonly IHubContext<ControlHub> _hubContext;
-
-        // Dictionary để lưu trữ kết nối TCP của từng client (ConnectionId)
-        private readonly ConcurrentDictionary<string, TcpClient> _connections = new();
-        private readonly ConcurrentDictionary<string, NetworkStream> _streams = new();
-
-        // Địa chỉ Server Console
-        private const string SERVER_IP = "127.0.0.1";
-        private const int SERVER_PORT = 8888; // Port của Server.cs
+        private Dictionary<string, TcpClient> _connections = new Dictionary<string, TcpClient>();
+        private readonly object _lock = new object();
 
         public ConnectionService(IHubContext<ControlHub> hubContext)
         {
             _hubContext = hubContext;
-            Console.WriteLine("[ConnectionService] Đã khởi tạo.");
         }
 
-        // Khi client web (JS) gọi lệnh
-        public async Task ProcessCommand(string connectionId, string message)
+        public async Task ProcessCommand(string connectionId, string command)
         {
-            string[] parts = message.Split('|');
-            string command = parts[0];
+            TcpClient? tcpClient;
 
-            // Nếu là lệnh LOGIN, chúng ta phải tạo kết nối TCP mới
-            if (command == "LOGIN")
+            lock (_lock)
             {
-                await CreateConnection(connectionId, message);
+                if (!_connections.TryGetValue(connectionId, out tcpClient))
+                {
+                    tcpClient = new TcpClient();
+                    _connections[connectionId] = tcpClient;
+                }
             }
-            // Nếu là các lệnh khác, gửi qua kết nối TCP đã có
-            else if (_streams.TryGetValue(connectionId, out var stream))
-            {
-                await SendTcpMessage(stream, message);
-            }
-        }
 
-        // Tạo kết nối TCP mới đến Server Console
-        private async Task CreateConnection(string connectionId, string loginMessage)
-        {
+            if (!tcpClient.Connected)
+            {
+                try
+                {
+                    await tcpClient.ConnectAsync("127.0.0.1", 8888);
+                    Console.WriteLine($"[WEB] Connected to server: {connectionId}");
+
+                    _ = Task.Run(() => ListenToServer(connectionId, tcpClient));
+                }
+                catch (Exception ex)
+                {
+                    await _hubContext.Clients.Client(connectionId)
+                        .SendAsync("ReceiveResponse", $"ERROR|Cannot connect to server: {ex.Message}");
+                    return;
+                }
+            }
+
             try
             {
-                TcpClient client = new TcpClient();
-                await client.ConnectAsync(SERVER_IP, SERVER_PORT);
+                NetworkStream stream = tcpClient.GetStream();
+                byte[] data = Encoding.UTF8.GetBytes(command);
+                byte[] lengthPrefix = BitConverter.GetBytes(data.Length);
 
-                NetworkStream stream = client.GetStream();
-
-                // Thêm vào Dictionary
-                _connections[connectionId] = client;
-                _streams[connectionId] = stream;
-
-                // Gửi lệnh LOGIN (mà Server.cs của bạn đang mong đợi)
-                await SendTcpMessage(stream, loginMessage);
-
-                // Bắt đầu một Task riêng để lắng nghe phản hồi từ Server Console
-                _ = ListenForResponses(connectionId, stream);
-
-                Console.WriteLine($"[ConnectionService] Đã tạo kết nối TCP cho {connectionId}");
+                await stream.WriteAsync(lengthPrefix, 0, lengthPrefix.Length);
+                await stream.WriteAsync(data, 0, data.Length);
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"[ConnectionService] Lỗi khi tạo kết nối: {ex.Message}");
-                // Gửi lỗi về JS
-                await _hubContext.Clients.Client(connectionId).SendAsync("ReceiveResponse", $"ERROR|Kết nối tới Server Console (port 8888) thất bại: {ex.Message}");
+                await _hubContext.Clients.Client(connectionId)
+                    .SendAsync("ReceiveResponse", $"ERROR|Send failed: {ex.Message}");
             }
         }
 
-        // Vòng lặp lắng nghe phản hồi từ Server Console
-        private async Task ListenForResponses(string connectionId, NetworkStream stream)
+        private async Task ListenToServer(string connectionId, TcpClient tcpClient)
         {
-            byte[] lengthBuffer = new byte[4]; // Buffer cho 4-byte độ dài
+            NetworkStream stream = tcpClient.GetStream();
+            byte[] lengthBuffer = new byte[4];
+
             try
             {
-                while (true)
+                while (tcpClient.Connected)
                 {
-                    // 1. Đọc 4-byte độ dài
                     int bytesRead = 0;
                     while (bytesRead < 4)
                     {
-                        // Dùng ReadAsync thay vì Read
                         int read = await stream.ReadAsync(lengthBuffer, bytesRead, 4 - bytesRead);
                         if (read == 0) throw new Exception("Server disconnected");
                         bytesRead += read;
                     }
+
                     int messageLength = BitConverter.ToInt32(lengthBuffer, 0);
 
-                    // 2. Đọc chính xác độ dài tin nhắn
                     byte[] messageBuffer = new byte[messageLength];
                     bytesRead = 0;
                     while (bytesRead < messageLength)
                     {
-                        // Dùng ReadAsync thay vì Read
                         int read = await stream.ReadAsync(messageBuffer, bytesRead, messageLength - bytesRead);
                         if (read == 0) throw new Exception("Server disconnected");
                         bytesRead += read;
                     }
 
-                    string response = Encoding.UTF8.GetString(messageBuffer, 0, messageLength);
+                    string message = Encoding.UTF8.GetString(messageBuffer);
 
-                    // Lấy được phản hồi! Gửi nó về cho client JS
-                    await _hubContext.Clients.Client(connectionId).SendAsync("ReceiveResponse", response);
+                    if (!message.Contains("WEBCAM_FRAME"))
+                    {
+                        Console.WriteLine($"[WEB→BROWSER] {message.Substring(0, Math.Min(100, message.Length))}");
+                    }
+
+                    await _hubContext.Clients.Client(connectionId)
+                        .SendAsync("ReceiveResponse", message);
                 }
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"[ConnectionService] Lỗi khi nghe: {ex.Message}");
+                Console.WriteLine($"[ERROR] Listen from server: {ex.Message}");
             }
             finally
             {
-                // Dọn dẹp khi ngắt kết nối
                 CloseConnection(connectionId);
             }
         }
 
-        // Gửi tin nhắn qua TCP
-        private async Task SendTcpMessage(NetworkStream stream, string message)
-        {
-            try
-            {
-                byte[] data = Encoding.UTF8.GetBytes(message);
-                byte[] lengthPrefix = BitConverter.GetBytes(data.Length); // Lấy 4-byte độ dài
-
-                // 1. Gửi độ dài
-                await stream.WriteAsync(lengthPrefix, 0, lengthPrefix.Length);
-                // 2. Gửi dữ liệu
-                await stream.WriteAsync(data, 0, data.Length);
-            }
-            catch (Exception ex)
-            {
-                Console.WriteLine($"[ConnectionService] Lỗi khi gửi: {ex.Message}");
-            }
-        }
-
-        // Đóng và dọn dẹp kết nối khi client JS ngắt kết nối
         public void CloseConnection(string connectionId)
         {
-            if (_streams.TryRemove(connectionId, out var stream))
+            lock (_lock)
             {
-                stream.Close();
-            }
-            if (_connections.TryRemove(connectionId, out var client))
-            {
-                client.Close();
-            }
-            Console.WriteLine($"[ConnectionService] Đã đóng kết nối TCP cho {connectionId}");
-        }
-
-        public void Dispose()
-        {
-            foreach (var id in _connections.Keys)
-            {
-                CloseConnection(id);
+                if (_connections.TryGetValue(connectionId, out var tcpClient))
+                {
+                    tcpClient?.Close();
+                    _connections.Remove(connectionId);
+                    Console.WriteLine($"[WEB] Connection closed: {connectionId}");
+                }
             }
         }
     }

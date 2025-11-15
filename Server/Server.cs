@@ -15,6 +15,7 @@ namespace RemotePCControl
         private Dictionary<string, ClientSession> sessions = new Dictionary<string, ClientSession>();
         private readonly object lockObj = new object();
         private bool isRunning = false;
+        private Dictionary<string, StreamStats> streamStats = new Dictionary<string, StreamStats>();
 
         public void Start(int port = 8888)
         {
@@ -28,7 +29,12 @@ namespace RemotePCControl
                 Console.WriteLine($"[SERVER] Waiting for connections...");
 
                 Thread acceptThread = new Thread(AcceptClients);
+                acceptThread.IsBackground = true;
                 acceptThread.Start();
+
+                Thread statsThread = new Thread(DisplayStats);
+                statsThread.IsBackground = true;
+                statsThread.Start();
             }
             catch (Exception ex)
             {
@@ -44,6 +50,7 @@ namespace RemotePCControl
                 {
                     TcpClient client = listener.AcceptTcpClient();
                     Thread clientThread = new Thread(() => HandleClient(client));
+                    clientThread.IsBackground = true;
                     clientThread.Start();
                 }
                 catch (Exception ex)
@@ -63,11 +70,10 @@ namespace RemotePCControl
             try
             {
                 NetworkStream stream = tcpClient.GetStream();
-                byte[] lengthBuffer = new byte[4]; // Buffer cho 4-byte độ dài
+                byte[] lengthBuffer = new byte[4];
 
                 while (tcpClient.Connected)
                 {
-                    // 1. Đọc 4-byte độ dài
                     int bytesRead = 0;
                     while (bytesRead < 4)
                     {
@@ -78,7 +84,6 @@ namespace RemotePCControl
 
                     int messageLength = BitConverter.ToInt32(lengthBuffer, 0);
 
-                    // 2. Đọc chính xác độ dài tin nhắn
                     byte[] messageBuffer = new byte[messageLength];
                     bytesRead = 0;
                     while (bytesRead < messageLength)
@@ -90,10 +95,15 @@ namespace RemotePCControl
 
                     string message = Encoding.UTF8.GetString(messageBuffer, 0, messageLength);
 
-                    // Chỉ in 100 ký tự đầu tiên để tránh làm treo console
-                    Console.WriteLine($"[RECEIVED] {message.Substring(0, Math.Min(message.Length, 100))}");
-
-                    ProcessMessage(client, message, stream);
+                    if (message.StartsWith("RESPONSE") && message.Contains("WEBCAM_FRAME"))
+                    {
+                        ProcessMessage(client, message, stream, true);
+                    }
+                    else
+                    {
+                        Console.WriteLine($"[RECEIVED] {message.Substring(0, Math.Min(message.Length, 100))}");
+                        ProcessMessage(client, message, stream, false);
+                    }
                 }
             }
             catch (Exception ex)
@@ -105,12 +115,13 @@ namespace RemotePCControl
                 lock (lockObj)
                 {
                     clients.Remove(client);
-                    // Remove session if this was controlled PC
                     var sessionToRemove = sessions.FirstOrDefault(s => s.Value.ControlledClient == client);
                     if (!sessionToRemove.Equals(default(KeyValuePair<string, ClientSession>)))
                     {
-                        sessions.Remove(sessionToRemove.Key);
-                        Console.WriteLine($"[SESSION] Removed session for {sessionToRemove.Key}");
+                        string ip = sessionToRemove.Key;
+                        sessions.Remove(ip);
+                        streamStats.Remove(ip);
+                        Console.WriteLine($"[SESSION] Removed session for {ip}");
                     }
                 }
                 tcpClient.Close();
@@ -118,7 +129,7 @@ namespace RemotePCControl
             }
         }
 
-        private void ProcessMessage(ConnectedClient client, string message, NetworkStream stream)
+        private void ProcessMessage(ConnectedClient client, string message, NetworkStream stream, bool isWebcamFrame)
         {
             try
             {
@@ -128,7 +139,6 @@ namespace RemotePCControl
                 switch (command)
                 {
                     case "REGISTER_CONTROLLED":
-                        // Format: REGISTER_CONTROLLED|IP|PASSWORD
                         if (parts.Length >= 3)
                         {
                             string ip = parts[1];
@@ -141,6 +151,12 @@ namespace RemotePCControl
                                     Password = password,
                                     ControlledClient = client
                                 };
+
+                                streamStats[ip] = new StreamStats
+                                {
+                                    IP = ip,
+                                    IsStreaming = false
+                                };
                             }
 
                             SendResponse(stream, "REGISTERED|SUCCESS");
@@ -149,7 +165,6 @@ namespace RemotePCControl
                         break;
 
                     case "LOGIN":
-                        // Format: LOGIN|IP|PASSWORD
                         if (parts.Length >= 3)
                         {
                             string ip = parts[1];
@@ -173,7 +188,6 @@ namespace RemotePCControl
                         break;
 
                     case "COMMAND":
-                        // Format: COMMAND|TARGET_IP|ACTUAL_COMMAND|PARAMS
                         if (parts.Length >= 3)
                         {
                             string targetIp = parts[1];
@@ -186,26 +200,51 @@ namespace RemotePCControl
                                 {
                                     var targetClient = sessions[targetIp].ControlledClient;
                                     ForwardCommand(targetClient, actualCommand, parameters);
-                                    Console.WriteLine($"[FORWARD] Command {actualCommand} forwarded to {targetIp}");
+
+                                    if (actualCommand == "WEBCAM_STREAM_START" && streamStats.ContainsKey(targetIp))
+                                    {
+                                        streamStats[targetIp].IsStreaming = true;
+                                        streamStats[targetIp].StartTime = DateTime.Now;
+                                        streamStats[targetIp].FramesForwarded = 0;
+                                        Console.WriteLine($"[WEBCAM] Stream started for {targetIp}");
+                                    }
+                                    else if (actualCommand == "WEBCAM_STREAM_STOP" && streamStats.ContainsKey(targetIp))
+                                    {
+                                        streamStats[targetIp].IsStreaming = false;
+                                        Console.WriteLine($"[WEBCAM] Stream stopped for {targetIp}");
+                                    }
+                                    else
+                                    {
+                                        Console.WriteLine($"[FORWARD] Command {actualCommand} forwarded to {targetIp}");
+                                    }
                                 }
                             }
                         }
                         break;
 
                     case "RESPONSE":
-                        // Format: RESPONSE|SOURCE_IP|DATA
                         if (parts.Length >= 3)
                         {
                             string sourceIp = parts[1];
-                            string data = string.Join("|", parts.Skip(2));
+                            string responseType = parts[2];
 
                             lock (lockObj)
                             {
                                 if (sessions.ContainsKey(sourceIp) && sessions[sourceIp].ControllerClient != null)
                                 {
                                     var controllerClient = sessions[sourceIp].ControllerClient;
+                                    string data = string.Join("|", parts.Skip(2));
                                     SendResponse(controllerClient.TcpClient.GetStream(), $"RESPONSE|{data}");
-                                    Console.WriteLine($"[FORWARD] Response forwarded from {sourceIp}");
+
+                                    if (responseType == "WEBCAM_FRAME" && streamStats.ContainsKey(sourceIp))
+                                    {
+                                        streamStats[sourceIp].FramesForwarded++;
+                                        streamStats[sourceIp].LastFrameTime = DateTime.Now;
+                                    }
+                                    else if (!isWebcamFrame)
+                                    {
+                                        Console.WriteLine($"[FORWARD] Response {responseType} forwarded from {sourceIp}");
+                                    }
                                 }
                             }
                         }
@@ -226,11 +265,9 @@ namespace RemotePCControl
                 string message = $"EXECUTE|{command}|{parameters}";
 
                 byte[] data = Encoding.UTF8.GetBytes(message);
-                byte[] lengthPrefix = BitConverter.GetBytes(data.Length); // Lấy 4-byte độ dài
+                byte[] lengthPrefix = BitConverter.GetBytes(data.Length);
 
-                // 1. Gửi độ dài
                 stream.Write(lengthPrefix, 0, lengthPrefix.Length);
-                // 2. Gửi dữ liệu
                 stream.Write(data, 0, data.Length);
             }
             catch (Exception ex)
@@ -244,11 +281,9 @@ namespace RemotePCControl
             try
             {
                 byte[] data = Encoding.UTF8.GetBytes(response);
-                byte[] lengthPrefix = BitConverter.GetBytes(data.Length); // Lấy 4-byte độ dài
+                byte[] lengthPrefix = BitConverter.GetBytes(data.Length);
 
-                // 1. Gửi độ dài
                 stream.Write(lengthPrefix, 0, lengthPrefix.Length);
-                // 2. Gửi dữ liệu
                 stream.Write(data, 0, data.Length);
             }
             catch (Exception ex)
@@ -256,6 +291,38 @@ namespace RemotePCControl
                 Console.WriteLine($"[ERROR] Send response: {ex.Message}");
             }
         }
+
+        private void DisplayStats()
+        {
+            while (isRunning)
+            {
+                Thread.Sleep(5000);
+
+                lock (lockObj)
+                {
+                    var activeStreams = streamStats.Where(s => s.Value.IsStreaming).ToList();
+
+                    if (activeStreams.Any())
+                    {
+                        Console.WriteLine("\n╔════════════════════════════════════════════════════════════╗");
+                        Console.WriteLine("║                    WEBCAM STREAM STATS                      ║");
+                        Console.WriteLine("╠════════════════════════════════════════════════════════════╣");
+
+                        foreach (var kvp in activeStreams)
+                        {
+                            var stats = kvp.Value;
+                            var elapsed = (DateTime.Now - stats.StartTime).TotalSeconds;
+                            var fps = elapsed > 0 ? stats.FramesForwarded / elapsed : 0;
+
+                            Console.WriteLine($"║ IP: {stats.IP,-15} | Frames: {stats.FramesForwarded,6} | FPS: {fps,4:F1}   ║");
+                        }
+
+                        Console.WriteLine("╚════════════════════════════════════════════════════════════╝\n");
+                    }
+                }
+            }
+        }
+
         public void Stop()
         {
             isRunning = false;
@@ -269,6 +336,7 @@ namespace RemotePCControl
                 }
                 clients.Clear();
                 sessions.Clear();
+                streamStats.Clear();
             }
         }
     }
@@ -292,22 +360,42 @@ namespace RemotePCControl
         public ConnectedClient ControllerClient { get; set; }
     }
 
+    public class StreamStats
+    {
+        public string IP { get; set; }
+        public bool IsStreaming { get; set; }
+        public int FramesForwarded { get; set; }
+        public DateTime StartTime { get; set; }
+        public DateTime LastFrameTime { get; set; }
+    }
+
     class Program
     {
         static void Main(string[] args)
         {
-            Console.WriteLine("=== REMOTE PC CONTROL SERVER ===");
-            Console.WriteLine("HCMUS - Socket Programming Project");
-            Console.WriteLine("================================\n");
+            Console.WriteLine("╔══════════════════════════════════════════════════════════╗");
+            Console.WriteLine("║         REMOTE PC CONTROL SERVER v2.0                    ║");
+            Console.WriteLine("║         HCMUS - Socket Programming Project               ║");
+            Console.WriteLine("║         ✓ Webcam Streaming Support                       ║");
+            Console.WriteLine("╚══════════════════════════════════════════════════════════╝");
+            Console.WriteLine();
 
             Server server = new Server();
             server.Start(8888);
 
-            Console.WriteLine("\nPress any key to stop the server...");
+            Console.WriteLine("\n[INFO] Server is running. Features:");
+            Console.WriteLine("  • Applications & Processes Control");
+            Console.WriteLine("  • Screenshot Capture");
+            Console.WriteLine("  • Keylogger");
+            Console.WriteLine("  • Webcam Real-time Streaming (15 FPS)");
+            Console.WriteLine("  • System Shutdown/Restart");
+            Console.WriteLine("\nPress any key to stop the server...\n");
+
             Console.ReadKey();
 
+            Console.WriteLine("\n[SERVER] Shutting down...");
             server.Stop();
-            Console.WriteLine("\nServer stopped.");
+            Console.WriteLine("[SERVER] Server stopped successfully.");
         }
     }
 }
