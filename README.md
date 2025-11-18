@@ -392,11 +392,23 @@ Project này được tạo cho mục đích học tập tại HCMUS.
 
 ## 👥 Contributors
 
-- **Họ tên:** [Tên của bạn]
-- **MSSV:** [Mã số sinh viên]
-- **Lớp:** [Lớp]
+- **Họ tên:** Huỳnh Tuấn Kiệt
+- **MSSV:** 24120356
+- **Lớp:** 24CTT5
 - **Môn:** Mạng máy tính
-- **Giảng viên:** [Tên giảng viên]
+- **Giảng viên:** Đỗ Hoàng Cường
+
+- - **Họ tên:** Võ Nhật Liệu
+- **MSSV:** 24120368
+- **Lớp:** 24CTT5
+- **Môn:** Mạng máy tính
+- **Giảng viên:** Đỗ Hoàng Cường
+
+- **Họ tên:** Đinh Tiến Phát
+- **MSSV:** 24120405
+- **Lớp:** 24CTT5
+- **Môn:** Mạng máy tính
+- **Giảng viên:** Đỗ Hoàng Cường
 
 ---
 
@@ -406,6 +418,7 @@ Nếu gặp vấn đề, hãy:
 1. Xem phần **Xử lý lỗi** ở trên
 2. Check console logs (F12 trên browser)
 3. Check Server console và ClientControlled console
+4. Liên hệ 24120356@student.hcmus.edu.vn để được tư vấn giải quyết
 
 ---
 
