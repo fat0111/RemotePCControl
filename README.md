@@ -392,19 +392,19 @@ Project này được tạo cho mục đích học tập tại HCMUS.
 
 ## 👥 Contributors
 
-- **Họ tên:** Huỳnh Tuấn Kiệt
+1. **Họ tên:** Huỳnh Tuấn Kiệt
 - **MSSV:** 24120356
 - **Lớp:** 24CTT5
 - **Môn:** Mạng máy tính
 - **Giảng viên:** Đỗ Hoàng Cường
 
-- - **Họ tên:** Võ Nhật Liệu
+2. **Họ tên:** Võ Nhật Liệu
 - **MSSV:** 24120368
 - **Lớp:** 24CTT5
 - **Môn:** Mạng máy tính
 - **Giảng viên:** Đỗ Hoàng Cường
 
-- **Họ tên:** Đinh Tiến Phát
+3.  **Họ tên:** Đinh Tiến Phát
 - **MSSV:** 24120405
 - **Lớp:** 24CTT5
 - **Môn:** Mạng máy tính
