@@ -19,7 +19,6 @@ namespace ClientControlled
         private void Form1_Load(object sender, EventArgs e)
         {
             var settings = ClientSettings.Load();
-            lblServer.Text = $"Server: {settings.ServerIp}:{settings.ServerPort}";
 
             client = new ClientService(settings.ServerIp, settings.ServerPort);
 
@@ -36,7 +35,6 @@ namespace ClientControlled
                 this.Text = "ĐÃ KẾT NỐI - Sẵn sàng nhận lệnh";
                 lblIp.Font = new Font(lblIp.Font.FontFamily, 14, FontStyle.Bold);
                 lblPassword.Font = new Font(lblPassword.Font.FontFamily, 14, FontStyle.Bold);
-                lblServer.Font = new Font(lblServer.Font.FontFamily, 12, FontStyle.Bold);
             }
             else
             {

@@ -155,6 +155,37 @@ info: Microsoft.Hosting.Lifetime[14]
 4. Click **"Kết nối"**
 5. Sử dụng các tính năng!
 
+### Step 5 (tuỳ chọn): Tạo shortcut chạy nhanh
+
+```bash
+dotnet run --project BuildProject
+```
+
+Lệnh này sẽ tìm những file `.exe` mới build nhất, tạo thư mục `Shortcuts/` trong repo, đồng thời sao chép 3 shortcut (Server, ClientControlled, WebInterface) lên Desktop của máy hiện tại để bạn bật/tắt nhanh chóng.
+
+---
+
+## 🖧 Thiết lập máy chủ duy nhất (Server + WebInterface cùng máy)
+
+1. **Chuẩn bị máy chủ**
+   - `dotnet run --project Server` (hoặc chạy `Server.exe`) để mở cổng 8888.  
+   - `dotnet run --project WebInterface` để mở giao diện web trên `http://0.0.0.0:5000`.  
+   - Mở firewall cho TCP 5000 (trình duyệt truy cập) và TCP 8888 (các máy ClientControlled kết nối).
+   - (Tuỳ chọn) Chạy `dotnet run --project BuildProject` để tạo shortcut ra Desktop.
+
+2. **Cấu hình ứng dụng WebInterface**
+   - Trong `WebInterface/appsettings.json`, đặt `ServerConnection:Host` là **IP LAN của máy chủ** (ví dụ `192.168.21.131`).  
+   - Khi chạy, ConnectionService sẽ dùng thông tin này để mở socket tới Server.
+
+3. **Máy bị điều khiển (ClientControlled)**
+   - Trong `ClientControlled/clientsettings.json` (hoặc biến môi trường `REMOTEPC_SERVER_IP`), nhập IP của máy chủ.  
+   - Chạy `ClientControlled.exe` trên từng máy cần bị điều khiển → ghi lại IP + Password hiển thị.
+
+4. **Máy điều khiển thứ 3**
+   - Mở trình duyệt → `http://<IP-máy-chủ>:5000`.  
+   - Đăng nhập bằng IP + Password của máy bị điều khiển.  
+   - Khi gửi lệnh, Server console sẽ log `[SESSION] Controller logged in...` nếu socket đã nối thành công.
+
 ### 🌐 Dùng trên nhiều PC trong cùng LAN
 
 1. **Chạy Server trên máy trung tâm**  
