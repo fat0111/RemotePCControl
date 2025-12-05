@@ -11,6 +11,8 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "WebInterface", "WebInterfac
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "BuildProject", "BuildProject\BuildProject.csproj", "{7F1D2CF8-85EC-4FD3-B56F-62DF6E478590}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "BuildProjectClient", "BuildProjectClient\BuildProjectClient.csproj", "{D4C7D0B2-9CF0-4DDA-9C54-BB3FA282FA1F}"
+EndProject
 Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "Solution Items", "Solution Items", "{8EC462FD-D22E-90A8-E5CE-7E832BA40C5D}"
 	ProjectSection(SolutionItems) = preProject
 		README.md = README.md
@@ -38,6 +40,10 @@ Global
 		{7F1D2CF8-85EC-4FD3-B56F-62DF6E478590}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{7F1D2CF8-85EC-4FD3-B56F-62DF6E478590}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{7F1D2CF8-85EC-4FD3-B56F-62DF6E478590}.Release|Any CPU.Build.0 = Release|Any CPU
+		{D4C7D0B2-9CF0-4DDA-9C54-BB3FA282FA1F}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{D4C7D0B2-9CF0-4DDA-9C54-BB3FA282FA1F}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{D4C7D0B2-9CF0-4DDA-9C54-BB3FA282FA1F}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{D4C7D0B2-9CF0-4DDA-9C54-BB3FA282FA1F}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE

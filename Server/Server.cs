@@ -138,6 +138,18 @@ namespace RemotePCControl
 
                 switch (command)
                 {
+                    case "LIST_SESSIONS":
+                        lock (lockObj)
+                        {
+                            var list = sessions.Select(s =>
+                            {
+                                string status = s.Value.ControllerClient != null ? "IN_USE" : "WAITING";
+                                return $"{s.Key}:{s.Value.Password}:{status}";
+                            }).ToList();
+                            SendResponse(stream, $"SESSIONS|{string.Join("||", list)}");
+                        }
+                        break;
+
                     case "REGISTER_CONTROLLED":
                         if (parts.Length >= 3)
                         {

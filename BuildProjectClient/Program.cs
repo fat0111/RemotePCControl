@@ -1,16 +1,13 @@
-using System;
-using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
-using System.Linq;
-using System.Net.NetworkInformation;
-using System.Net;
-using System.Net.Sockets;
 using System.IO.Compression;
+using System.Linq;
+using System.Net;
+using System.Net.NetworkInformation;
+using System.Net.Sockets;
 using System.Text.Json;
 
-
-namespace BuildProject;
+namespace BuildProjectClient;
 
 internal record ShortcutDefinition(string Name, string ProjectFolder, string ExecutableName);
 internal record ServerInfo(string Ip, int Port, DateTime GeneratedAt);
@@ -31,36 +28,27 @@ internal static class Program
             string solutionRoot = FindSolutionRoot();
             string desktopPath = Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory);
             string repoShortcutFolder = Path.Combine(solutionRoot, "Shortcuts");
-            string ipAddress = GetLocalIpAddress();
-            var serverInfo = new ServerInfo(ipAddress, 8888, DateTime.Now);
-
-            RunCmd($"setx REMOTEPC_SERVER_IP {ipAddress}");
-            RunCmd("setx REMOTEPC_SERVER_PORT 8888");
-            RunCmd($"setx ServerConnection__Host {ipAddress}");
-            RunCmd("setx ServerConnection__Port 8888");
-
-            SaveServerInfo(solutionRoot, serverInfo);
-
             Directory.CreateDirectory(repoShortcutFolder);
 
+            ServerInfo serverInfo = LoadServerInfo(solutionRoot);
+            SaveServerInfoCopies(solutionRoot, serverInfo);
+
             Console.WriteLine("╔══════════════════════════════════════════════════════╗");
-            Console.WriteLine("║    RemotePCControl Auto Build & Shortcut Builder     ║");
+            Console.WriteLine("║    RemotePCControl Client Build & Shortcut Builder   ║");
             Console.WriteLine("╚══════════════════════════════════════════════════════╝");
             Console.WriteLine($"Solution root : {solutionRoot}");
             Console.WriteLine($"Desktop       : {desktopPath}");
-            Console.WriteLine($"IP Address    : {ipAddress}");
+            Console.WriteLine($"Server IP     : {serverInfo.Ip}");
+            Console.WriteLine($"Server Port   : {serverInfo.Port}");
             Console.WriteLine();
 
             foreach (var target in Targets)
             {
                 Console.WriteLine($"[PROCESSING] {target.Name}...");
-                
-                // Build and publish project
+
                 string publishPath = BuildAndPublishProject(solutionRoot, target);
-                
-                // find executable in publish folder
                 string exePath = Path.Combine(publishPath, target.ExecutableName);
-                
+
                 if (!File.Exists(exePath))
                 {
                     throw new FileNotFoundException($"Không tìm thấy {target.ExecutableName} sau khi publish tại {publishPath}");
@@ -68,7 +56,6 @@ internal static class Program
 
                 Console.WriteLine($"[FOUND] {exePath}");
 
-                // create shortcuts
                 CreateShortcut(repoShortcutFolder, target.Name, exePath);
                 CreateShortcut(desktopPath, target.Name, exePath);
 
@@ -77,7 +64,7 @@ internal static class Program
                     ApplyClientSettings(publishPath, serverInfo);
                     CreateClientPackage(solutionRoot, publishPath);
                 }
-                
+
                 Console.WriteLine();
             }
 
@@ -92,59 +79,32 @@ internal static class Program
         }
     }
 
-    public static void RunCmd(string command)
+    private static ServerInfo LoadServerInfo(string solutionRoot)
     {
-        var process = new System.Diagnostics.Process();
-        var startInfo = new System.Diagnostics.ProcessStartInfo
+        string infoPath = Path.Combine(solutionRoot, "server-info.json");
+        if (File.Exists(infoPath))
         {
-            FileName = "cmd.exe",
-            Arguments = "/C " + command,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            UseShellExecute = false,
-            CreateNoWindow = true
-        };
-
-        process.StartInfo = startInfo;
-        process.Start();
-        process.WaitForExit();
-    }
-
-
-    public static string GetLocalIpAddress()
-    {
-        foreach (var ni in NetworkInterface.GetAllNetworkInterfaces())
-        {
-            if (ni.OperationalStatus != OperationalStatus.Up)
-                continue;
-
-            // CHỈ CHO PHÉP CARD THẬT
-            if (ni.NetworkInterfaceType != NetworkInterfaceType.Wireless80211 &&
-                ni.NetworkInterfaceType != NetworkInterfaceType.Ethernet)
+            try
             {
-                continue; // Bỏ VMware, VirtualBox, Hyper-V, Bluetooth, Loopback...
-            }
-
-            var props = ni.GetIPProperties();
-
-            // ƯU TIÊN CARD CÓ GATEWAY (NGHĨA LÀ CARD ĐANG DÙNG INTERNET)
-            if (props.GatewayAddresses.Count == 0)
-                continue;
-
-            foreach (var addr in props.UnicastAddresses)
-            {
-                if (addr.Address.AddressFamily == AddressFamily.InterNetwork &&
-                    !IPAddress.IsLoopback(addr.Address))
+                string json = File.ReadAllText(infoPath);
+                var info = JsonSerializer.Deserialize<ServerInfo>(json);
+                if (info != null && !string.IsNullOrWhiteSpace(info.Ip))
                 {
-                    return addr.Address.ToString();
+                    return info;
                 }
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[WARN] Cannot parse server-info.json: {ex.Message}");
             }
         }
 
-        return "";
+        string fallbackIp = GetLocalIpAddress();
+        Console.WriteLine($"[WARN] server-info.json missing. Using local IP {fallbackIp}:8888");
+        return new ServerInfo(fallbackIp, 8888, DateTime.Now);
     }
 
-    private static void SaveServerInfo(string solutionRoot, ServerInfo info)
+    private static void SaveServerInfoCopies(string solutionRoot, ServerInfo info)
     {
         string rootFile = Path.Combine(solutionRoot, "server-info.json");
         string webFile = Path.Combine(solutionRoot, "WebInterface", "wwwroot", "server-info.json");
@@ -153,7 +113,7 @@ internal static class Program
         File.WriteAllText(rootFile, json);
         Directory.CreateDirectory(Path.GetDirectoryName(webFile)!);
         File.WriteAllText(webFile, json);
-        Console.WriteLine($"[INFO] Server info saved to {rootFile}");
+        Console.WriteLine($"[INFO] Server info copied to {rootFile} and web root");
     }
 
     private static void ApplyClientSettings(string publishPath, ServerInfo info)
@@ -198,6 +158,35 @@ internal static class Program
         }
     }
 
+    private static string GetLocalIpAddress()
+    {
+        foreach (var ni in NetworkInterface.GetAllNetworkInterfaces())
+        {
+            if (ni.OperationalStatus != OperationalStatus.Up)
+                continue;
+
+            if (ni.NetworkInterfaceType != NetworkInterfaceType.Wireless80211 &&
+                ni.NetworkInterfaceType != NetworkInterfaceType.Ethernet)
+            {
+                continue;
+            }
+
+            var props = ni.GetIPProperties();
+            if (props.GatewayAddresses.Count == 0)
+                continue;
+
+            foreach (var addr in props.UnicastAddresses)
+            {
+                if (addr.Address.AddressFamily == AddressFamily.InterNetwork &&
+                    !IPAddress.IsLoopback(addr.Address))
+                {
+                    return addr.Address.ToString();
+                }
+            }
+        }
+
+        return "";
+    }
 
     private static string FindSolutionRoot()
     {
@@ -221,20 +210,17 @@ internal static class Program
 
         Console.WriteLine($"  → Building project: {definition.ProjectFolder}");
 
-        // Tìm file .csproj
         string? csprojFile = Directory.GetFiles(projectPath, "*.csproj").FirstOrDefault();
         if (csprojFile == null)
         {
             throw new FileNotFoundException($"Cannot find .csproj file in {projectPath}");
         }
 
-        // delete old publish folder if it exists
         if (Directory.Exists(publishPath))
         {
             Directory.Delete(publishPath, true);
         }
 
-        // run dotnet publish
         var startInfo = new ProcessStartInfo
         {
             FileName = "dotnet",
@@ -286,3 +272,4 @@ internal static class Program
         Console.WriteLine($"  [SHORTCUT] {shortcutPath}");
     }
 }
+

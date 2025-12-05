@@ -40,6 +40,12 @@ namespace RemotePCControl.WebInterface.Hubs
             await _connectionService.ProcessCommand(connectionId, message);
         }
 
+        public async Task RequestSessions()
+        {
+            string connectionId = Context.ConnectionId;
+            await _connectionService.ProcessCommand(connectionId, "LIST_SESSIONS");
+        }
+
         // Tự động dọn dẹp khi client JS (tab trình duyệt) bị đóng
         public override Task OnDisconnectedAsync(Exception? exception)
         {

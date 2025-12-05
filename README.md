@@ -29,11 +29,13 @@
 ### Protocol giao tiếp
 
 **Length-Prefix Protocol:**
+
 ```
 [4 bytes: length] + [N bytes: UTF-8 message]
 ```
 
 **Message formats:**
+
 ```
 REGISTER_CONTROLLED|<IP>|<PASSWORD>
 LOGIN|<IP>|<PASSWORD>
@@ -62,25 +64,30 @@ cd RemotePCControl
 ### Bước 2: Cài đặt dependencies
 
 **ClientControlled project:**
+
 ```bash
 cd ClientControlled
 dotnet add package AForge.Video --version 2.2.5
 dotnet add package AForge.Video.DirectShow --version 2.2.5
 ```
 
-**WebInterface project:**
-```bash
-cd WebInterface
-# Dependencies đã được cấu hình trong csproj
-```
-
 ### Bước 3: sử dụng BuildProject để build, public và tạo các shortcut để chạy project
 
 ```bash
-# Build Server
+# Build
 cd BuildProject
 dotnet run
 ```
+
+### Bước 3a: Build nhanh cho máy bị điều khiển
+
+```bash
+cd BuildProjectClient
+dotnet run
+```
+
+- Không thiết lập biến môi trường server.
+- Tự lấy `server-info.json` (được sinh khi chạy BuildProject trên máy server) để ghi sẵn `clientsettings.json` và đóng gói file `client-controlled.zip` cho Web tải về.
 
 ---
 
@@ -98,6 +105,7 @@ Hoặc chạy file `Server.exe` trong `bin/Debug/net8.0/`
 Hoặc chạy shortcut được tạo ra ở `Desktop` hoặc trong folder `Shortcuts`
 
 **Kết quả:**
+
 ```
 ╔══════════════════════════════════════════════════════════╗
 ║         REMOTE PC CONTROL SERVER v2.0                    ║
@@ -121,6 +129,7 @@ Hoặc chạy file `ClientControlled.exe`
 Hoặc chạy shortcut được tạo ra ở `Desktop` hoặc trong folder `Shortcuts`
 
 **Kết quả:**
+
 ```
 [CLIENT] Connected to server
 [INFO] IP: 192.168.1.100
@@ -139,6 +148,7 @@ dotnet run
 Hoặc chạy shortcut được tạo ra ở `Desktop` hoặc trong folder `Shortcuts`
 
 **Kết quả:**
+
 ```
 info: Microsoft.Hosting.Lifetime[14]
       Now listening on: https://localhost:7001
@@ -169,6 +179,7 @@ info: Microsoft.Hosting.Lifetime[14]
 ### Tính năng Smart Camera Selection
 
 Camera sẽ được chấm điểm và chọn theo thứ tự:
+
 - ✅ Bỏ qua camera ảo: OBS, Snap Camera, DroidCam, ManyCam...
 - ✅ Bỏ qua camera IR/Windows Hello
 - ✅ Ưu tiên camera có resolution cao (FHD/HD)
@@ -176,6 +187,7 @@ Camera sẽ được chấm điểm và chọn theo thứ tự:
 - ✅ Ưu tiên thương hiệu uy tín: Logitech, Microsoft, HP...
 
 **Console logs:**
+
 ```
 [WEBCAM] Scanning: Integrated Camera
 [WEBCAM] -> Score: 50
@@ -218,12 +230,12 @@ private string GetWebcamFrame()
 
 ### Bảng hiệu suất
 
-| Config | Bandwidth | CPU (Client) | FPS | Quality |
-|--------|-----------|--------------|-----|---------|
-| 15fps, Q60, 720p | 600 KB/s | 8% | 15 | Good ⭐⭐⭐⭐ |
-| 15fps, Q60, 1080p | 900 KB/s | 12% | 15 | Great ⭐⭐⭐⭐⭐ |
-| 10fps, Q40, 720p | 200 KB/s | 5% | 10 | OK ⭐⭐⭐ |
-| 30fps, Q80, 1080p | 3 MB/s | 18% | 30 | Excellent ⭐⭐⭐⭐⭐ |
+| Config            | Bandwidth | CPU (Client) | FPS | Quality              |
+| ----------------- | --------- | ------------ | --- | -------------------- |
+| 15fps, Q60, 720p  | 600 KB/s  | 8%           | 15  | Good ⭐⭐⭐⭐        |
+| 15fps, Q60, 1080p | 900 KB/s  | 12%          | 15  | Great ⭐⭐⭐⭐⭐     |
+| 10fps, Q40, 720p  | 200 KB/s  | 5%           | 10  | OK ⭐⭐⭐            |
+| 30fps, Q80, 1080p | 3 MB/s    | 18%          | 30  | Excellent ⭐⭐⭐⭐⭐ |
 
 **💡 Khuyến nghị:** 15fps, Q60, 720p (cân bằng tốt nhất cho LAN)
 
@@ -235,6 +247,7 @@ private string GetWebcamFrame()
 
 **Nguyên nhân:** Không phát hiện camera  
 **Giải pháp:**
+
 1. Kiểm tra Device Manager → Camera có hoạt động?
 2. Cài lại driver camera
 3. Restart máy
@@ -243,6 +256,7 @@ private string GetWebcamFrame()
 
 **Nguyên nhân:** Tất cả camera bị blacklist  
 **Giải pháp:**
+
 1. Xem console logs → Tìm tên camera thực của bạn
 2. Mở `ClientControlled.cs` → Tìm hàm `FindBestCamera()`
 3. Xóa tên camera khỏi `blacklist` array
@@ -250,6 +264,7 @@ private string GetWebcamFrame()
 ### ❌ Lỗi: "Camera in use by another application"
 
 **Giải pháp:**
+
 1. Đóng tất cả app khác đang dùng camera (Zoom, Teams, Skype...)
 2. Mở Task Manager → Tìm process đang giữ camera
 3. Restart ClientControlled app
@@ -257,6 +272,7 @@ private string GetWebcamFrame()
 ### ❌ Lỗi: Stream lag/chậm
 
 **Giải pháp:**
+
 - Giảm FPS xuống 10 (`Thread.Sleep(100)`)
 - Giảm quality xuống 40 (`Encoder.Quality, 40L`)
 - Giảm resolution bằng cách giới hạn trong `FindBestCamera()`
@@ -264,6 +280,7 @@ private string GetWebcamFrame()
 ### ❌ Lỗi: "Cannot connect to server"
 
 **Giải pháp:**
+
 1. Kiểm tra Server có đang chạy không?
 2. Kiểm tra Windows Firewall → Allow port 8888
 3. Kiểm tra IP address đúng không (127.0.0.1 cho localhost)
@@ -273,16 +290,19 @@ private string GetWebcamFrame()
 ## 📊 Testing Checklist
 
 ### ✅ Server
+
 - [ ] Server khởi động thành công
 - [ ] Console hiển thị "Started on port 8888"
 - [ ] Accept được connections
 
 ### ✅ ClientControlled
+
 - [ ] Kết nối được Server
 - [ ] Hiển thị IP và Password
 - [ ] Camera được detect và chọn đúng
 
 ### ✅ Web Interface
+
 - [ ] Đăng nhập thành công
 - [ ] Tất cả 6 tabs hoạt động
 - [ ] List Apps/Processes thành công
@@ -294,6 +314,7 @@ private string GetWebcamFrame()
 - [ ] System commands hoạt động
 
 ### ✅ Webcam Streaming
+
 - [ ] Camera khởi động thành công
 - [ ] Video stream mượt mà
 - [ ] FPS ~15 (±2)
@@ -332,45 +353,6 @@ RemotePCControl/
 
 ---
 
-## 🎓 Báo cáo Đồ án
-
-### Nội dung báo cáo gợi ý
-
-#### 1. Giới thiệu
-- Socket Programming là gì?
-- TCP/IP Protocol
-- Mục tiêu dự án
-
-#### 2. Phân tích yêu cầu
-- 6 tính năng chính
-- Use cases
-- Kiến trúc Client-Server
-
-#### 3. Thiết kế hệ thống
-- Sơ đồ kiến trúc
-- Protocol thiết kế
-- Length-prefix framing
-- Message format
-
-#### 4. Cài đặt
-- Server implementation
-- Client implementation
-- Web Interface với SignalR
-- Smart Camera Selection Algorithm
-- Webcam Streaming Implementation
-
-#### 5. Testing và Kết quả
-- Screenshots các tính năng
-- Performance metrics
-- Webcam streaming demo
-
-#### 6. Kết luận
-- Kết quả đạt được
-- Khó khăn và cách giải quyết
-- Hướng phát triển
-
----
-
 ## 🔒 Lưu ý bảo mật
 
 **⚠️ QUAN TRỌNG:** Đây là project học tập về Socket Programming.
@@ -391,18 +373,21 @@ Project này được tạo cho mục đích học tập tại HCMUS.
 ## 👥 Contributors
 
 1. **Họ tên:** Huỳnh Tuấn Kiệt
+
 - **MSSV:** 24120356
 - **Lớp:** 24CTT5
 - **Môn:** Mạng máy tính
 - **Giảng viên:** Đỗ Hoàng Cường
 
 2. **Họ tên:** Võ Nhật Liệu
+
 - **MSSV:** 24120368
 - **Lớp:** 24CTT5
 - **Môn:** Mạng máy tính
 - **Giảng viên:** Đỗ Hoàng Cường
 
 3.  **Họ tên:** Đinh Tiến Phát
+
 - **MSSV:** 24120405
 - **Lớp:** 24CTT5
 - **Môn:** Mạng máy tính
@@ -413,6 +398,7 @@ Project này được tạo cho mục đích học tập tại HCMUS.
 ## 📞 Support
 
 Nếu gặp vấn đề, hãy:
+
 1. Xem phần **Xử lý lỗi** ở trên
 2. Check console logs (F12 trên browser)
 3. Check Server console và ClientControlled console
@@ -422,8 +408,113 @@ Nếu gặp vấn đề, hãy:
 
 ## 🎉 Demo Video
 
-[Link video demo của bạn]
+[Link video demo]
+
+# Giải thích các mô hình cơ bản trong đồ án
+
+## Server
+
+### Các hàm cơ bản trong Server
+
+Server đóng vai trò là trung gian (Relay Server), chịu trách nhiệm duy trì kết nối và định tuyến dữ liệu giữa Máy điều khiển (Web) và Máy bị điều khiển (ClientControlled).
+
+| Tên Hàm              | Tham số                       | Mô tả chức năng                                                                                                                                                                                                                                                                                 |
+| :------------------- | :---------------------------- | :---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **`Start`**          | `int port`                    | - Khởi tạo `TcpListener` tại cổng 8888.<br>- Khởi chạy luồng `AcceptClients` để chờ kết nối.<br>- Khởi chạy luồng `DisplayStats` để theo dõi hiệu năng Webcam.                                                                                                                                  |
+| **`AcceptClients`**  | _Không_                       | - Vòng lặp vô hạn chạy trên luồng nền (Background Thread).<br>- Chờ kết nối TCP mới (`listener.AcceptTcpClient`).<br>- Khi có Client kết nối, tạo một luồng riêng `HandleClient` để xử lý.                                                                                                      |
+| **`HandleClient`**   | `TcpClient tcpClient`         | - Xử lý logic cho từng kết nối cụ thể.<br>- **Bước 1:** Đọc 4 bytes header để lấy độ dài gói tin.<br>- **Bước 2:** Đọc phần thân gói tin (Payload) dựa trên độ dài.<br>- **Bước 3:** Gọi `ProcessMessage` để xử lý nghiệp vụ.<br>- **Bước 4:** Tự động dọn dẹp Session khi Client ngắt kết nối. |
+| **`ProcessMessage`** | `client`, `message`, `stream` | - **Router chính của Server.** Phân tích chuỗi lệnh (split `                                                                                                                                                                                                                                    | `) và thực thi:<br>  + `REGISTER_CONTROLLED`: Đăng ký máy bị điều khiển vào Dictionary `sessions`.<br>  + `LOGIN`: Xác thực máy điều khiển kết nối vào phiên.<br>  + `COMMAND`: Chuyển tiếp lệnh (Shutdown, Keylog...) sang máy đích.<br>  + `RESPONSE/WEBCAM`: Chuyển tiếp dữ liệu/hình ảnh về máy điều khiển. |
+| **`ForwardCommand`** | `targetClient`, `command`     | - Đóng gói lệnh theo giao thức **Length-Prefix**.<br>- Gửi lệnh điều khiển đến máy bị điều khiển thông qua `NetworkStream`.                                                                                                                                                                     |
+| **`DisplayStats`**   | _Không_                       | - Luồng giám sát chạy mỗi 5 giây.<br>- Hiển thị bảng thống kê FPS và lưu lượng truyền tải của Webcam Streaming lên màn hình Console Server.                                                                                                                                                     |
+
+### Các cấu trúc dữ liệu quản lý (State Management)
+
+Để quản lý trạng thái của nhiều máy cùng lúc, Server sử dụng các cấu trúc dữ liệu sau:
+
+1.  **`List<ConnectedClient> clients`**:
+
+    - Lưu trữ danh sách tất cả các kết nối TCP đang active.
+    - Dùng để quản lý vòng đời kết nối (đóng/mở).
+
+2.  **`Dictionary<string, ClientSession> sessions`**:
+
+    - **Key:** Địa chỉ IP của máy bị điều khiển.
+    - **Value:** Object `ClientSession` chứa thông tin cặp đôi (Controller - Controlled) và Password.
+    - _Công dụng:_ Giúp Server biết phải chuyển gói tin từ máy nào sang máy nào.
+
+3.  **`Dictionary<string, StreamStats> streamStats`**:
+
+    - Lưu trữ trạng thái Streaming (FPS, Frame count, Start Time).
+    - Dùng để tính toán và hiển thị hiệu suất truyền hình ảnh thời gian thực.
+
+Dưới đây là phần tài liệu kỹ thuật chi tiết cho module **ClientControlled** (Máy bị điều khiển), được soạn thảo dựa trên mã nguồn bạn cung cấp. Bạn hãy nối tiếp phần này vào file báo cáo/README.md của bạn.
 
 ---
 
-**🌟 Chúc bạn thành công với đồ án!**
+## ClientControlled (Máy bị điều khiển)
+
+### Tổng quan Module
+
+**ClientControlled** là ứng dụng Windows Forms chạy trên máy tính cần được hỗ trợ hoặc giám sát. Ứng dụng này hoạt động như một "Agent", nhận lệnh từ Server và thực thi các thao tác hệ thống (quản lý tiến trình, chụp màn hình, stream webcam...).
+
+Khi khởi động, Client sẽ tự động kết nối đến Server, sinh ra một mật khẩu ngẫu nhiên và hiển thị lên màn hình giao diện `Form1` để người dùng cung cấp cho người điều khiển.
+
+### Công nghệ và Thư viện
+
+| Hạng mục               | Công nghệ / Thư viện | Mô tả chi tiết                                                          |
+| :--------------------- | :------------------- | :---------------------------------------------------------------------- |
+| **Framework**          | .NET 8.0 (Windows)   | Sử dụng `net8.0-windows` để truy cập các API hệ thống sâu hơn.          |
+| **UI**                 | Windows Forms        | Giao diện hiển thị trạng thái kết nối, IP và Password.                  |
+| **Video Processing**   | AForge.Video         | Thư viện xử lý và truy xuất thiết bị Video/Webcam.                      |
+| **System Interaction** | `System.Diagnostics` | Quản lý Process, khởi chạy ứng dụng, shutdown/restart máy.              |
+| **Low-level Input**    | `user32.dll`         | Sử dụng P/Invoke (`GetAsyncKeyState`) để thực hiện chức năng Keylogger. |
+| **Configuration**      | JSON                 | Lưu trữ cấu hình IP Server trong `clientsettings.json`.                 |
+
+### Các hàm chính trong `ClientService`
+
+Class `ClientService` là trái tim của ứng dụng, chứa toàn bộ logic xử lý nghiệp vụ.
+
+| Tên Hàm                 | Công dụng chính                                                                                                                                                                                                                                                                                                        |
+| :---------------------- | :--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **`Connect`**           | - Thiết lập kết nối TCP đến Server dựa trên IP/Port cấu hình.<br>- Gửi gói tin đăng ký `REGISTER_CONTROLLED` kèm IP Local và Password.<br>- Khởi chạy Keylogger và luồng lắng nghe lệnh.                                                                                                                               |
+| **`ListenForCommands`** | - Vòng lặp lắng nghe dữ liệu từ Server.<br>- Đọc Header (4 bytes) để xác định kích thước gói tin, sau đó đọc Payload và chuyển sang `ProcessCommand`.                                                                                                                                                                  |
+| **`ExecuteCommand`**    | - **Switch-Case khổng lồ** xử lý các lệnh:<br> + `LIST_APPS/PROCESSES`: Lấy danh sách ứng dụng/tiến trình.<br> + `START/STOP`: Chạy hoặc tắt ứng dụng/tiến trình.<br> + `SCREENSHOT`: Chụp màn hình, nén JPEG và gửi Base64.<br> + `WEBCAM_*`: Các lệnh điều khiển camera.<br> + `SHUTDOWN/RESTART`: Điều khiển nguồn. |
+| **`TakeScreenshot`**    | - Sử dụng `Graphics.CopyFromScreen` để chụp toàn màn hình.<br>- Nén ảnh sang định dạng JPEG và chuyển đổi sang chuỗi Base64 để gửi qua mạng.                                                                                                                                                                           |
+| **`GetKeyLogs`**        | - Trả về chuỗi log các phím bấm đã được ghi lại bởi class `KeyLogger` chạy ngầm.                                                                                                                                                                                                                                       |
+
+### Cơ chế Xử lý Webcam (Smart Camera Selection)
+
+Đây là tính năng nổi bật giúp tự động chọn camera tốt nhất trên thiết bị.
+
+1.  **Thuật toán chọn Camera (`FindBestCamera`)**:
+
+    - **Blacklist:** Tự động loại bỏ các camera ảo, camera hồng ngoại (IR), hoặc phần mềm bên thứ 3 (OBS, DroidCam, ManyCam...) dựa trên tên thiết bị.
+    - **Whitelist:** Cộng điểm ưu tiên cho các từ khóa uy tín (Logitech, Microsoft, HD, FHD, Built-in).
+    - **Scoring System (Hệ thống tính điểm):**
+      - Resolution $\ge$ 1080p: +50 điểm.
+      - Resolution $\ge$ 720p: +30 điểm.
+      - FPS $\ge$ 60: +20 điểm.
+      - FPS $\ge$ 30: +10 điểm.
+    - \-\> Kết quả: Chọn camera có điểm số cao nhất để stream.
+
+2.  **Streaming (`StreamWebcamFrames`)**:
+
+    - Chạy trên luồng riêng (Background Thread).
+    - Capture khung hình -\> Nén JPEG với chất lượng 60% (để tối ưu băng thông mạng LAN).
+    - Gửi dữ liệu dạng `WEBCAM_FRAME|Base64...`.
+    - Sử dụng `Thread.Sleep(66)` để duy trì tốc độ khoảng **15 FPS**, cân bằng giữa độ mượt và hiệu năng CPU.
+
+### Cấu hình & Keylogger
+
+- **Keylogger (`KeyLogger` class):**
+
+  - Sử dụng vòng lặp vô tận kiểm tra trạng thái 255 phím ảo mỗi 10ms.
+  - Dùng hàm API Windows `GetAsyncKeyState` để phát hiện phím nhấn ngay cả khi ứng dụng không focus.
+  - Lưu log vào `StringBuilder` trong bộ nhớ.
+
+- **Cấu hình (`ClientSettings` class):**
+
+  - Tự động tải file `clientsettings.json`.
+  - Hỗ trợ Override bằng biến môi trường `REMOTEPC_SERVER_IP` (hữu ích khi deploy số lượng lớn hoặc chạy qua script).
+
+---

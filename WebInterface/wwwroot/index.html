@@ -17,17 +17,46 @@
 
         <div class="content">
             <div id="modeSelection" class="mode-selection">
-                <div class="mode-card" onclick="showControlledInfo()">
-                    <div class="icon">💻</div>
-                    <h3>PC bị điều khiển</h3>
-                    <p>Chạy ứng dụng ClientControlled.exe</p>
-                </div>
-                <div class="mode-card" onclick="selectMode('controller')">
-                    <div class="icon">🎮</div>
-                    <h3>Người điều khiển</h3>
-                    <p>Điều khiển một máy tính từ xa</p>
-                </div>
+                    <div class="mode-card" onclick="selectMode('controlled')">
+                        <div class="icon">💻</div>
+                        <h3>PC bị điều khiển</h3>
+                        <p>Tự tải & chạy ClientControlled</p>
+                    </div>
+                    <div class="mode-card" onclick="selectMode('controller')">
+                        <div class="icon">🎮</div>
+                        <h3>Người điều khiển</h3>
+                        <p>Điều khiển một máy tính từ xa</p>
+                    </div>
             </div>
+
+                <div id="controlledSection" class="form-section">
+                    <h3 style="margin-bottom: 16px;">💻 Cài đặt máy bị điều khiển</h3>
+                    <div id="serverInfoCard" class="info-card">
+                        <div>
+                            <p class="muted">Server</p>
+                            <h4 id="serverEndpoint">Đang tải thông tin server...</h4>
+                        </div>
+                        <button class="btn-download" onclick="downloadClientPackage()">⬇️ Tải gói ClientControlled</button>
+                    </div>
+                    <div class="info-card">
+                        <ol class="steps">
+                            <li>Tải file <b>client-controlled.zip</b> và giải nén.</li>
+                            <li>Chạy <code>ClientControlled.exe</code> trong thư mục giải nén.</li>
+                            <li>Sau khi chạy, IP &amp; Password sẽ hiển thị tại đây và trên cửa sổ app.</li>
+                        </ol>
+                    </div>
+                    <div class="info-card">
+                        <div class="card-header">
+                            <div>
+                                <p class="muted">Trạng thái</p>
+                                <h4>Danh sách máy đã đăng ký</h4>
+                            </div>
+                            <button class="btn-primary small" onclick="refreshSessions()">🔄 Làm mới</button>
+                        </div>
+                        <div id="sessionList" class="session-list">Chưa có máy kết nối.</div>
+                    </div>
+                    <button class="btn-secondary" style="margin-top: 12px;" onclick="selectMode(null)">← Quay lại</button>
+                </div>
 
             <div id="loginSection" class="form-section">
                 <h3 style="margin-bottom: 20px;">🔐 Đăng nhập để điều khiển</h3>

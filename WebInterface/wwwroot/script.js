@@ -3,17 +3,24 @@ let targetIp = null;
 let isWebcamStreaming = false;
 let frameCount = 0;
 let lastFpsUpdate = Date.now();
+let serverInfo = { ip: null, port: null };
+
+document.addEventListener('DOMContentLoaded', async () => {
+    await loadServerInfo();
+    await setupSignalR();
+});
 
 function selectMode(mode) {
     document.getElementById('modeSelection').style.display = mode ? 'none' : 'grid';
     document.getElementById('loginSection').classList.remove('active');
+    document.getElementById('controlledSection').classList.remove('active');
+
     if (mode === 'controller') {
         document.getElementById('loginSection').classList.add('active');
+    } else if (mode === 'controlled') {
+        document.getElementById('controlledSection').classList.add('active');
+        refreshSessions();
     }
-}
-
-function showControlledInfo() {
-    alert('💻 PC BỊ ĐIỀU KHIỂN\n\nĐể sử dụng chế độ này:\n1. Mở ứng dụng ClientControlled.exe\n2. Ứng dụng sẽ tự động kết nối Server\n3. Hiển thị IP và Password\n4. Sử dụng thông tin đó để đăng nhập từ Web này');
 }
 
 function switchTab(tabName) {
@@ -24,14 +31,18 @@ function switchTab(tabName) {
 }
 
 async function setupSignalR() {
-    connection = new signalR.HubConnectionBuilder()
-        .withUrl("/controlHub")
-        .build();
+    if (!connection) {
+        connection = new signalR.HubConnectionBuilder()
+            .withUrl("/controlHub")
+            .build();
 
-    connection.on("ReceiveResponse", (response) => {
-        console.log("📥", response.substring(0, 100));
-        handleResponse(response);
-    });
+        connection.on("ReceiveResponse", (response) => {
+            console.log("📥", response.substring(0, 100));
+            handleResponse(response);
+        });
+    }
+
+    if (connection.state === "Connected" || connection.state === "Connecting") return;
 
     try {
         await connection.start();
@@ -80,7 +91,62 @@ function handleResponse(response) {
         case 'KEYLOGS':
             document.getElementById('keylogDisplay').textContent = data || "Không có keylogs.";
             break;
+        case 'SESSIONS':
+            renderSessions(data);
+            break;
     }
+}
+
+async function loadServerInfo() {
+    try {
+        const res = await fetch('/server-info.json');
+        if (!res.ok) throw new Error(res.statusText);
+        const json = await res.json();
+        serverInfo = { ip: json.Ip, port: json.Port };
+        document.getElementById('serverEndpoint').textContent = `${json.Ip}:${json.Port}`;
+    } catch {
+        document.getElementById('serverEndpoint').textContent = 'Không lấy được IP server, dùng thủ công.';
+    }
+}
+
+function downloadClientPackage() {
+    window.location.href = '/downloads/client-controlled.zip';
+}
+
+async function refreshSessions() {
+    await setupSignalR();
+    if (connection && connection.state === "Connected") {
+        connection.invoke("RequestSessions").catch(err => console.error(err));
+    }
+}
+
+function renderSessions(data) {
+    const container = document.getElementById('sessionList');
+    if (!data) {
+        container.textContent = "Chưa có máy kết nối.";
+        return;
+    }
+
+    const items = data.split('||').filter(Boolean);
+    if (items.length === 0) {
+        container.textContent = "Chưa có máy kết nối.";
+        return;
+    }
+
+    container.innerHTML = '';
+    items.forEach(item => {
+        const [ip, password, status] = item.split(':');
+        const card = document.createElement('div');
+        card.className = 'session-item';
+        card.innerHTML = `
+            <div class="session-meta">
+                <strong>${ip || 'N/A'}</strong>
+                <span>Password: ${password || 'N/A'}</span>
+            </div>
+            <span class="session-status ${status === 'WAITING' ? 'waiting' : ''}">${status || 'UNKNOWN'}</span>
+        `;
+        container.appendChild(card);
+    });
 }
 
 function updateWebcamFrame(base64Data) {
