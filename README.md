@@ -17,14 +17,6 @@
 
 ## 🏗️ Kiến trúc hệ thống
 
-```mermaid
-graph TD
-    Client[ClientControlled<br>(WinForms C#)<br>+ Webcam] <-->|Port 8888| Server[Server (C#)<br>Console App<br>Forwarding Server]
-    Server <-->|SignalR| Web[Web Interface<br>(ASP.NET Core)<br>Browser]
-```
-
-*(Hoặc sơ đồ text gốc)*
-
 ```plaintext
 ┌─────────────────┐         ┌─────────────────┐         ┌─────────────────┐
 │  Web Interface  │◄───────►│   Server (C#)   │◄───────►│ ClientControlled│
