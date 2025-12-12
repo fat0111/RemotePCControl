@@ -117,8 +117,8 @@
 
             <!-- Login Section -->
             <div id="loginSection" class="form-section">
-                <button class="close-btn" onclick="selectMode(null)">×</button>
-                <h3 style="margin-bottom: 20px; color: white;">🔐 Đăng nhập để điều khiển</h3>
+                <h3 style="margin-bottom: 20px;">🔐 Đăng nhập để điều khiển</h3>
+                <div id="loginError" class="error-message"></div>
                 <div class="input-group">
                     <label style="color: white;">Tài khoản (IP Address)</label>
                     <input type="text" id="loginIp" placeholder="192.168.1.100" value="127.0.0.1">
@@ -129,6 +129,7 @@
                 </div>
                 <button class="btn btn-primary" onclick="login()">Kết nối</button>
             </div>
+           
 
             <!-- Control Panel -->
             <div id="controlPanel" class="control-panel">
@@ -240,16 +241,6 @@
                             <div class="icon">📹</div>
                             <h4>Bật Webcam</h4>
                             <p>Khởi động camera</p>
-                        </div>
-                        <div class="action-btn" onclick="startWebcamStream()">
-                            <div class="icon">🔴</div>
-                            <h4>Live Stream</h4>
-                            <p>Xem trực tiếp</p>
-                        </div>
-                        <div class="action-btn" onclick="stopWebcamStream()">
-                            <div class="icon">⏸️</div>
-                            <h4>Dừng Stream</h4>
-                            <p>Tạm dừng video</p>
                         </div>
                         <div class="action-btn" onclick="captureWebcam()">
                             <div class="icon">📸</div>
