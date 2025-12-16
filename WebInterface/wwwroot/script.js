@@ -17,7 +17,7 @@ function selectMode(mode) {
     const body = document.body;
     
     if (mode === null) {
-        // Quay lại trang chủ
+        // Back to landing page
         contentOverlay.classList.remove('active');
         body.classList.remove('overlay-active');
         heroSection.style.display = 'flex';
@@ -25,7 +25,7 @@ function selectMode(mode) {
         document.getElementById('controlledSection').classList.remove('active');
         document.getElementById('controlPanel').classList.remove('active');
     } else {
-        // Hiển thị overlay và ẩn hero
+        // Show overlay and hide hero section
         heroSection.style.display = 'none';
         contentOverlay.classList.add('active');
         body.classList.add('overlay-active');
@@ -46,7 +46,7 @@ function switchTab(tabName) {
     document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
     document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
     
-    // Tìm tab button tương ứng và kích hoạt
+    // Find matching tab button and activate it
     const tabButtons = document.querySelectorAll('.tab');
     tabButtons.forEach(btn => {
         if (btn.textContent.includes(getTabEmoji(tabName))) {
@@ -124,9 +124,14 @@ function handleResponse(response) {
         case 'WEBCAM_IMAGE':
             addWebcamSnapshot(data);
             break;
-        case 'WEBCAM_FRAME':
-            if (isWebcamStreaming) updateWebcamFrame(data);
+        case 'WEBCAM_FRAME': {
+            // Format từ server: RESPONSE|WEBCAM_FRAME|{base64}|{pingMs}|{lossPercent}
+            const base64 = parts[2] || '';
+            const pingMs = parseFloat(parts[3] || '-1');
+            const lossPercent = parseFloat(parts[4] || '-1');
+            if (isWebcamStreaming) updateWebcamFrame(base64, pingMs, lossPercent);
             break;
+        }
         case 'APPS':
             displayApps(data);
             break;
@@ -197,7 +202,7 @@ function renderSessions(data) {
     });
 }
 
-function updateWebcamFrame(base64Data) {
+function updateWebcamFrame(base64Data, pingMs, lossPercent) {
     let container = document.getElementById('webcamContainer');
     let img = document.getElementById('webcamStreamImg');
 
@@ -212,6 +217,9 @@ function updateWebcamFrame(base64Data) {
                         </div>
                     </div>
                     <div class="webcam-fps" id="webcamFps">-- FPS</div>
+                    <div class="webcam-netstats" id="webcamNetStats">
+                        Ping: -- ms | Loss: -- %
+                    </div>
                 </div>
             `;
         img = document.getElementById('webcamStreamImg');
@@ -226,6 +234,14 @@ function updateWebcamFrame(base64Data) {
         document.getElementById('webcamFps').textContent = `${fps} FPS`;
         frameCount = 0;
         lastFpsUpdate = now;
+    }
+
+    // Cập nhật overlay thống kê mạng (không block render, chỉ set text)
+    const statsEl = document.getElementById('webcamNetStats');
+    if (statsEl) {
+        const pingText = (isNaN(pingMs) || pingMs < 0) ? '--' : pingMs.toFixed(1);
+        const lossText = (isNaN(lossPercent) || lossPercent < 0) ? '--' : lossPercent.toFixed(1);
+        statsEl.textContent = `Ping: ${pingText} ms | Loss: ${lossText} %`;
     }
 }
 

@@ -1,13 +1,13 @@
 ﻿using RemotePCControl;
 using System;
-using System.Drawing; // Thêm dòng này để chỉnh màu
+using System.Drawing; // Added for custom coloring
 using System.Windows.Forms;
 
 namespace ClientControlled
 {
     public partial class Form1 : Form
     {
-        // Tạo một biến để giữ object ClientControlled
+        // Field to keep reference to ClientControlled object
         private ClientService? client;
 
         public Form1()
@@ -15,7 +15,7 @@ namespace ClientControlled
             InitializeComponent();
         }
 
-        // Code này sẽ chạy ngay khi Form màu trắng hiện lên
+        // This code runs right after the white form shows up
         private void Form1_Load(object sender, EventArgs e)
         {
             var settings = ClientSettings.Load();

@@ -1,4 +1,5 @@
 ﻿using System;
+using System.Net;
 using System.Net.Sockets;
 using System.Text;
 using System.Threading;
@@ -24,6 +25,33 @@ namespace RemotePCControl
         private string password;
         private bool isRunning = false;
         private KeyLogger keyLogger;
+
+        // ==================== UDP STREAMING (NETWORK LAYER) ====================
+        // UDP socket used to send webcam/screen frames and receive ping packets.
+        // All streaming data (video/screen frames) MUST go through UDP, not TCP.
+        private UdpClient udpClient;
+        private IPEndPoint udpServerEndPoint;
+
+        // UDP streaming config
+        private const int UdpStreamPort = 9999;      // UDP port that the Server listens on
+        private const int UdpMaxPayload = 1400;      // Max payload per packet (avoid MTU fragmentation)
+        private int currentFrameId = 0;              // Incremented for every sent frame
+
+        // ==================== UDP PROTOCOL ====================
+        //
+        // Each UDP packet has the following binary header (total 24 bytes):
+        // 0 - 3   : frame_id      (Int32, monotonically increasing for each frame)
+        // 4 - 5   : packet_index  (Int16, 0 .. total_packets-1)
+        // 6 - 7   : total_packets (Int16, total number of packets for this frame)
+        // 8 - 15  : timestamp_ms  (Int64, Unix time milliseconds when the frame was created)
+        // 16      : packet_type   (byte) 0 = frame data, 1 = PING, 2 = PONG (ping reply)
+        // 17 - 23 : reserved      (7 bytes, for future extensions)
+        //
+        // With packet_type = 0 (frame data) the payload after the header is
+        // a slice of the JPEG-encoded frame buffer.
+        //
+        // With packet_type = 1 (PING) or 2 (PONG) there is usually no payload,
+        // we only use frame_id + timestamp_ms to measure RTT.
 
         // Webcam streaming variables
         private VideoCaptureDevice videoDevice;
@@ -73,6 +101,16 @@ namespace RemotePCControl
                 client.Connect(serverIp, serverPort);
                 stream = client.GetStream();
                 isRunning = true;
+
+                // Initialize UDP client for streaming.
+                // We do not bind to a fixed local port – the OS chooses one – but we
+                // always reuse the same socket for both send/receive so the server
+                // can ping back to this endpoint.
+                udpClient = new UdpClient();
+                udpServerEndPoint = new IPEndPoint(IPAddress.Parse(serverIp), UdpStreamPort);
+
+                // UDP receive loop for ping packets etc. (async / non-blocking)
+                _ = Task.Run(UdpReceiveLoop);
 
                 string registerMessage = $"REGISTER_CONTROLLED|{localIp}|{password}";
                 SendMessage(registerMessage);
@@ -624,17 +662,17 @@ namespace RemotePCControl
             {
                 try
                 {
-                    string frame = GetWebcamFrame();
-                    if (frame.StartsWith("WEBCAM_FRAME|"))
+                    if (TryGetWebcamFrameBytes(out byte[] frameBytes, out long timestampMs))
                     {
-                        SendResponse(frame);
+                        // Gửi frame qua UDP, không dùng TCP cho streaming
+                        SendFrameOverUdp(frameBytes, timestampMs);
                         framesSent++;
 
                         if (framesSent % 75 == 0)
                         {
                             double elapsed = (DateTime.Now - startTime).TotalSeconds;
                             double fps = framesSent / elapsed;
-                            Console.WriteLine($"[WEBCAM] Streaming: {framesSent} frames sent, {fps:F1} fps");
+                            Console.WriteLine($"[WEBCAM] Streaming (UDP): {framesSent} frames sent, {fps:F1} fps");
                         }
                     }
 
@@ -660,14 +698,21 @@ namespace RemotePCControl
             return "SUCCESS|Webcam streaming stopped";
         }
 
-        private string GetWebcamFrame()
+        /// <summary>
+        /// Capture the latest webcam frame and encode it as JPEG bytes.
+        /// The network layer is responsible for fragmentation.
+        /// </summary>
+        private bool TryGetWebcamFrameBytes(out byte[] imageBytes, out long timestampMs)
         {
+            imageBytes = Array.Empty<byte>();
+            timestampMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+
             try
             {
                 lock (frameLock)
                 {
                     if (lastWebcamFrame == null)
-                        return "ERROR|No frame available";
+                        return false;
 
                     using (MemoryStream ms = new MemoryStream())
                     {
@@ -678,15 +723,63 @@ namespace RemotePCControl
                         var jpegCodec = GetEncoderInfo("image/jpeg");
                         lastWebcamFrame.Save(ms, jpegCodec, encoderParams);
 
-                        byte[] imageBytes = ms.ToArray();
-                        string base64 = Convert.ToBase64String(imageBytes);
-                        return $"WEBCAM_FRAME|{base64}";
+                        imageBytes = ms.ToArray();
+                        timestampMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+                        return true;
                     }
                 }
             }
             catch (Exception ex)
             {
-                return $"ERROR|{ex.Message}";
+                Console.WriteLine($"[ERROR] Get webcam frame bytes: {ex.Message}");
+                return false;
+            }
+        }
+
+        /// <summary>
+        /// Send a JPEG frame over UDP, split into multiple packets.
+        /// Designed to avoid blocking the capture/render thread.
+        /// </summary>
+        private async void SendFrameOverUdp(byte[] frameBytes, long timestampMs)
+        {
+            if (udpClient == null || udpServerEndPoint == null || frameBytes == null || frameBytes.Length == 0)
+                return;
+
+            try
+            {
+                int frameId = Interlocked.Increment(ref currentFrameId);
+                int totalPackets = (frameBytes.Length + UdpMaxPayload - 1) / UdpMaxPayload;
+
+                for (int packetIndex = 0; packetIndex < totalPackets; packetIndex++)
+                {
+                    int offset = packetIndex * UdpMaxPayload;
+                    int size = Math.Min(UdpMaxPayload, frameBytes.Length - offset);
+
+                    byte[] packet = new byte[24 + size]; // header (24) + payload
+
+                    // Header layout described in UDP PROTOCOL section above
+                    // frame_id
+                    Array.Copy(BitConverter.GetBytes(frameId), 0, packet, 0, 4);
+                    // packet_index
+                    Array.Copy(BitConverter.GetBytes((short)packetIndex), 0, packet, 4, 2);
+                    // total_packets
+                    Array.Copy(BitConverter.GetBytes((short)totalPackets), 0, packet, 6, 2);
+                    // timestamp_ms
+                    Array.Copy(BitConverter.GetBytes(timestampMs), 0, packet, 8, 8);
+                    // packet_type = 0 (frame data)
+                    packet[16] = 0;
+                    // 17-23 reserved (0)
+
+                    // payload
+                    Buffer.BlockCopy(frameBytes, offset, packet, 24, size);
+
+                    // SendAsync non-blocking
+                    await udpClient.SendAsync(packet, packet.Length, udpServerEndPoint);
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[ERROR] SendFrameOverUdp: {ex.Message}");
             }
         }
 
@@ -811,6 +904,46 @@ namespace RemotePCControl
             stream?.Close();
             client?.Close();
             Console.WriteLine("[CLIENT] Disconnected");
+        }
+
+        /// <summary>
+        /// UDP receive loop (ping, etc.). Does not block the main logic.
+        /// </summary>
+        private async Task UdpReceiveLoop()
+        {
+            if (udpClient == null) return;
+
+            IPEndPoint remote = new IPEndPoint(IPAddress.Any, 0);
+
+            while (isRunning)
+            {
+                try
+                {
+                    UdpReceiveResult result = await udpClient.ReceiveAsync();
+                    byte[] buffer = result.Buffer;
+
+                    if (buffer.Length < 24) continue; // at least header size
+
+                    byte packetType = buffer[16];
+
+                    // Currently the client only needs to handle ping from the server
+                    if (packetType == 1) // PING from server -> reply with PONG
+                    {
+                        buffer[16] = 2; // change packet_type to PONG
+                        await udpClient.SendAsync(buffer, buffer.Length, result.RemoteEndPoint);
+                    }
+                }
+                catch (ObjectDisposedException)
+                {
+                    // Socket was closed during Disconnect()
+                    break;
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"[ERROR] UdpReceiveLoop: {ex.Message}");
+                    await Task.Delay(100);
+                }
+            }
         }
     }
 

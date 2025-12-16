@@ -54,13 +54,13 @@ internal static class Program
             foreach (var target in Targets)
             {
                 Console.WriteLine($"[PROCESSING] {target.Name}...");
-                
+
                 // Build and publish project
                 string publishPath = BuildAndPublishProject(solutionRoot, target);
-                
+
                 // find executable in publish folder
                 string exePath = Path.Combine(publishPath, target.ExecutableName);
-                
+
                 if (!File.Exists(exePath))
                 {
                     throw new FileNotFoundException($"Không tìm thấy {target.ExecutableName} sau khi publish tại {publishPath}");
@@ -77,7 +77,7 @@ internal static class Program
                     ApplyClientSettings(publishPath, serverInfo);
                     CreateClientPackage(solutionRoot, publishPath);
                 }
-                
+
                 Console.WriteLine();
             }
 
@@ -111,21 +111,21 @@ internal static class Program
     }
 
 
-   public static string GetLocalIpAddress()
+    public static string GetLocalIpAddress()
     {
         foreach (var ni in NetworkInterface.GetAllNetworkInterfaces())
         {
             if (ni.OperationalStatus != OperationalStatus.Up)
                 continue;
 
-            // CHỈ CHO PHÉP CARD THẬT
+            // ONLY allow physical network adapters
             if (ni.NetworkInterfaceType != NetworkInterfaceType.Wireless80211 &&
                 ni.NetworkInterfaceType != NetworkInterfaceType.Ethernet)
             {
                 continue;
             }
 
-            // BỎ QUA CÁC CARD VPN (Radmin, Hamachi, v.v.)
+            // Ignore VPN/virtual adapters (Radmin, Hamachi, etc.)
             string name = ni.Name.ToLower();
             string desc = ni.Description.ToLower();
 
@@ -137,7 +137,7 @@ internal static class Program
 
             var props = ni.GetIPProperties();
 
-            // ƯU TIÊN CARD CÓ GATEWAY (card đang dùng internet)
+            // Prefer adapter that has default gateway (the one currently used for Internet)
             if (props.GatewayAddresses.Count == 0)
                 continue;
 
@@ -232,7 +232,7 @@ internal static class Program
 
         Console.WriteLine($"  → Building project: {definition.ProjectFolder}");
 
-        // Tìm file .csproj
+        // Locate .csproj file under the given folder
         string? csprojFile = Directory.GetFiles(projectPath, "*.csproj").FirstOrDefault();
         if (csprojFile == null)
         {

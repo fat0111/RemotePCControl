@@ -17,6 +17,19 @@ namespace RemotePCControl
         private bool isRunning = false;
         private Dictionary<string, StreamStats> streamStats = new Dictionary<string, StreamStats>();
 
+        // ==================== UDP STREAMING (NETWORK LAYER) ====================
+        // UDP listener used to receive webcam/screen frames and ping packets from ClientControlled
+        private UdpClient udpStreamListener;
+        private const int UdpStreamPort = 9999;
+
+        // Aggregate packets by frame_id for each client (key = registered client IP)
+        private readonly Dictionary<string, Dictionary<int, UdpFrameBuffer>> udpFrameBuffers
+            = new Dictionary<string, Dictionary<int, UdpFrameBuffer>>();
+
+        // Store the latest UDP endpoint for each logical client IP so we can send ping packets back
+        private readonly Dictionary<string, IPEndPoint> udpClientEndpoints
+            = new Dictionary<string, IPEndPoint>();
+
         public void Start(int port = 8888)
         {
             try
@@ -31,6 +44,13 @@ namespace RemotePCControl
                 Thread acceptThread = new Thread(AcceptClients);
                 acceptThread.IsBackground = true;
                 acceptThread.Start();
+
+                // Start UDP listener for streaming
+                udpStreamListener = new UdpClient(UdpStreamPort);
+                Console.WriteLine($"[SERVER][UDP] Listening for stream packets on UDP port {UdpStreamPort}");
+
+                _ = Task.Run(UdpReceiveLoop);   // async / non-blocking
+                _ = Task.Run(UdpPingLoop);      // periodic ping to measure RTT
 
                 Thread statsThread = new Thread(DisplayStats);
                 statsThread.IsBackground = true;
@@ -288,6 +308,309 @@ namespace RemotePCControl
             }
         }
 
+        // ==================== UDP STREAMING IMPLEMENTATION ====================
+
+        /// <summary>
+        /// UDP receive loop: groups packets by frame_id and handles ping responses.
+        /// Packet header (24 bytes) must match ClientControlled:
+        /// 0 - 3   : frame_id      (Int32)
+        /// 4 - 5   : packet_index  (Int16)
+        /// 6 - 7   : total_packets (Int16)
+        /// 8 - 15  : timestamp_ms  (Int64, Unix time ms when frame was created)
+        /// 16      : packet_type   (byte) 0 = frame data, 1 = PING, 2 = PONG
+        /// 17 - 23 : reserved      (7 bytes)
+        /// </summary>
+        private async Task UdpReceiveLoop()
+        {
+            if (udpStreamListener == null) return;
+
+            Console.WriteLine("[SERVER][UDP] UdpReceiveLoop started");
+
+            while (isRunning)
+            {
+                try
+                {
+                    UdpReceiveResult result = await udpStreamListener.ReceiveAsync();
+                    byte[] buffer = result.Buffer;
+
+                    if (buffer.Length < 24)
+                        continue; // at least header size
+
+                    int frameId = BitConverter.ToInt32(buffer, 0);
+                    short packetIndex = BitConverter.ToInt16(buffer, 4);
+                    short totalPackets = BitConverter.ToInt16(buffer, 6);
+                    long timestampMs = BitConverter.ToInt64(buffer, 8);
+                    byte packetType = buffer[16];
+
+                    string remoteIp = result.RemoteEndPoint.Address.ToString();
+
+                    if (packetType == 0)
+                    {
+                        HandleUdpFramePacket(remoteIp, result.RemoteEndPoint, frameId, packetIndex, totalPackets, timestampMs, buffer, 24);
+                    }
+                    else if (packetType == 2)
+                    {
+                        // PONG response for a PING -> update RTT
+                        HandleUdpPong(remoteIp, frameId, timestampMs);
+                    }
+                }
+                catch (ObjectDisposedException)
+                {
+                    break; // socket closed when Stop() is called
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"[ERROR][UDP] ReceiveLoop: {ex.Message}");
+                    await Task.Delay(50);
+                }
+            }
+
+            Console.WriteLine("[SERVER][UDP] UdpReceiveLoop stopped");
+        }
+
+        /// <summary>
+        /// Handle a packet that carries frame data (packet_type = 0).
+        /// Group packets by frame_id; when a frame has all packets, assemble JPEG
+        /// and forward it to the controller over TCP/SignalR as WEBCAM_FRAME.
+        /// </summary>
+        private void HandleUdpFramePacket(string remoteIp, IPEndPoint remoteEndPoint, int frameId, short packetIndex, short totalPackets, long timestampMs, byte[] buffer, int payloadOffset)
+        {
+            if (packetIndex < 0 || packetIndex >= totalPackets || totalPackets <= 0)
+                return;
+
+            string logicalIp = remoteIp; // by default use remote IP as session key
+
+            lock (lockObj)
+            {
+                if (!sessions.ContainsKey(logicalIp))
+                {
+                    // If physical IP differs from logical IP we could map here in the future.
+                    // For now: drop the frame if there is no matching session.
+                    return;
+                }
+
+                // Remember real UDP endpoint (IP + Port) of client so we can send ping packets
+                udpClientEndpoints[logicalIp] = remoteEndPoint;
+
+                if (!udpFrameBuffers.TryGetValue(logicalIp, out var framesForClient))
+                {
+                    framesForClient = new Dictionary<int, UdpFrameBuffer>();
+                    udpFrameBuffers[logicalIp] = framesForClient;
+                }
+
+                if (!framesForClient.TryGetValue(frameId, out var frameBuffer))
+                {
+                    frameBuffer = new UdpFrameBuffer
+                    {
+                        FrameId = frameId,
+                        TotalPackets = totalPackets,
+                        FirstPacketTime = DateTime.Now,
+                        TimestampMs = timestampMs,
+                        Packets = new byte[totalPackets][],
+                        Received = new bool[totalPackets],
+                        ReceivedCount = 0
+                    };
+                    framesForClient[frameId] = frameBuffer;
+                }
+
+                // Copy packet payload into frame buffer
+                int payloadSize = buffer.Length - payloadOffset;
+                if (payloadSize <= 0) return;
+
+                if (!frameBuffer.Received[packetIndex])
+                {
+                    frameBuffer.Packets[packetIndex] = new byte[payloadSize];
+                    Buffer.BlockCopy(buffer, payloadOffset, frameBuffer.Packets[packetIndex], 0, payloadSize);
+                    frameBuffer.Received[packetIndex] = true;
+                    frameBuffer.ReceivedCount++;
+                }
+
+                // Check timeout for all old frames
+                CleanupOldFramesLocked(logicalIp, framesForClient);
+
+                // If we have all packets -> assemble frame
+                if (frameBuffer.ReceivedCount == frameBuffer.TotalPackets)
+                {
+                    AssembleAndForwardFrameLocked(logicalIp, frameBuffer);
+                    framesForClient.Remove(frameId);
+                }
+            }
+        }
+
+        /// <summary>
+        /// Drop frames that are missing packets for longer than the timeout.
+        /// </summary>
+        private void CleanupOldFramesLocked(string ip, Dictionary<int, UdpFrameBuffer> framesForClient)
+        {
+            const int frameTimeoutMs = 200; // 200 ms timeout per frame
+            var now = DateTime.Now;
+            var toRemove = new List<int>();
+
+            foreach (var kv in framesForClient)
+            {
+                var f = kv.Value;
+                if ((now - f.FirstPacketTime).TotalMilliseconds > frameTimeoutMs)
+                {
+                    // Frame timed out -> compute a packet-loss sample and drop it
+                    if (streamStats.TryGetValue(ip, out var stats))
+                    {
+                        // Use Math.Max with int cast to avoid ambiguous overload (short vs int)
+                        double loss = 1.0 - (double)f.ReceivedCount / Math.Max(1, (int)f.TotalPackets);
+                        // Simple exponential moving average
+                        stats.AvgPacketLossPercent = stats.AvgPacketLossPercent * 0.9 + loss * 100 * 0.1;
+                        stats.LastFrameTotalPackets = f.TotalPackets;
+                        stats.LastFrameReceivedPackets = f.ReceivedCount;
+                    }
+                    toRemove.Add(kv.Key);
+                }
+            }
+
+            foreach (var id in toRemove)
+            {
+                framesForClient.Remove(id);
+            }
+        }
+
+        /// <summary>
+        /// Assemble a complete frame into JPEG bytes, compute packet loss (0% when full),
+        /// then send it back to the controller via TCP as WEBCAM_FRAME.
+        /// </summary>
+        private void AssembleAndForwardFrameLocked(string ip, UdpFrameBuffer frame)
+        {
+            int totalSize = frame.Packets.Sum(p => p?.Length ?? 0);
+            byte[] fullFrame = new byte[totalSize];
+            int offset = 0;
+
+            for (int i = 0; i < frame.TotalPackets; i++)
+            {
+                byte[] part = frame.Packets[i];
+                if (part == null) continue;
+                Buffer.BlockCopy(part, 0, fullFrame, offset, part.Length);
+                offset += part.Length;
+            }
+
+            string base64 = Convert.ToBase64String(fullFrame);
+
+            if (!sessions.ContainsKey(ip) || sessions[ip].ControllerClient == null)
+                return;
+
+            var controllerClient = sessions[ip].ControllerClient;
+            var stats = streamStats.ContainsKey(ip) ? streamStats[ip] : null;
+
+            if (stats != null)
+            {
+                stats.FramesForwarded++;
+                stats.LastFrameTime = DateTime.Now;
+                stats.LastFrameTotalPackets = frame.TotalPackets;
+                stats.LastFrameReceivedPackets = frame.ReceivedCount;
+
+                // Full frame -> packet loss approximated as 0 for this sample
+                double loss = 0;
+                stats.AvgPacketLossPercent = stats.AvgPacketLossPercent * 0.9 + loss * 100 * 0.1;
+            }
+
+            double pingMs = stats?.AvgPingMs ?? -1;
+            double lossPercent = stats?.AvgPacketLossPercent ?? -1;
+
+            // Format: RESPONSE|WEBCAM_FRAME|{base64}|{pingMs}|{lossPercent}
+            // (keep legacy convention: RESPONSE|<Type>|data...)
+            string data = $"RESPONSE|WEBCAM_FRAME|{base64}|{pingMs:F1}|{lossPercent:F1}";
+            try
+            {
+                SendResponse(controllerClient.TcpClient.GetStream(), data);
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[ERROR][UDP] Forward frame: {ex.Message}");
+            }
+        }
+
+        // ==================== UDP PING ====================
+
+        // Store information about pending pings: key = ip, value = (pingId, sendTime)
+        private readonly Dictionary<string, (int frameId, DateTime sendTime)> udpPingStates
+            = new Dictionary<string, (int frameId, DateTime sendTime)>();
+
+        /// <summary>
+        /// Periodically send UDP ping packets to streaming clients to measure RTT.
+        /// </summary>
+        private async Task UdpPingLoop()
+        {
+            const int pingIntervalMs = 1000;
+
+            while (isRunning)
+            {
+                try
+                {
+                    await Task.Delay(pingIntervalMs);
+
+                    lock (lockObj)
+                    {
+                        if (udpStreamListener == null) continue;
+
+                        foreach (var kv in udpClientEndpoints.ToList())
+                        {
+                            string ip = kv.Key;
+                            IPEndPoint endpoint = kv.Value;
+
+                            if (!streamStats.ContainsKey(ip) || !streamStats[ip].IsStreaming)
+                                continue;
+
+                            int pingId = Environment.TickCount;
+                            long timestampMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+
+                            byte[] packet = new byte[24];
+                            // frame_id reused as ping_id
+                            Array.Copy(BitConverter.GetBytes(pingId), 0, packet, 0, 4);
+                            // packet_index = 0, total_packets = 1
+                            Array.Copy(BitConverter.GetBytes((short)0), 0, packet, 4, 2);
+                            Array.Copy(BitConverter.GetBytes((short)1), 0, packet, 6, 2);
+                            // timestamp_ms
+                            Array.Copy(BitConverter.GetBytes(timestampMs), 0, packet, 8, 8);
+                            // packet_type = 1 (PING)
+                            packet[16] = 1;
+
+                            udpStreamListener.Send(packet, packet.Length, endpoint);
+                            udpPingStates[ip] = (pingId, DateTime.Now);
+                        }
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"[ERROR][UDP] PingLoop: {ex.Message}");
+                }
+            }
+        }
+
+        /// <summary>
+        /// Handle PONG from client and update moving-average RTT.
+        /// </summary>
+        private void HandleUdpPong(string remoteIp, int pingId, long timestampMs)
+        {
+            string ip = remoteIp;
+
+            lock (lockObj)
+            {
+                if (!udpPingStates.TryGetValue(ip, out var state))
+                    return;
+
+                double rttMs = (DateTime.Now - state.sendTime).TotalMilliseconds;
+
+                if (streamStats.TryGetValue(ip, out var stats))
+                {
+                    if (stats.AvgPingMs == 0)
+                    {
+                        stats.AvgPingMs = rttMs;
+                    }
+                    else
+                    {
+                        // Simple exponential moving average
+                        stats.AvgPingMs = stats.AvgPingMs * 0.8 + rttMs * 0.2;
+                    }
+                }
+            }
+        }
+
         private void SendResponse(NetworkStream stream, string response)
         {
             try
@@ -326,7 +649,9 @@ namespace RemotePCControl
                             var elapsed = (DateTime.Now - stats.StartTime).TotalSeconds;
                             var fps = elapsed > 0 ? stats.FramesForwarded / elapsed : 0;
 
-                            Console.WriteLine($"║ IP: {stats.IP,-15} | Frames: {stats.FramesForwarded,6} | FPS: {fps,4:F1}   ║");
+                            Console.WriteLine(
+                                $"║ IP: {stats.IP,-15} | Frames: {stats.FramesForwarded,6} | FPS: {fps,4:F1} | " +
+                                $"Ping: {stats.AvgPingMs,6:F1} ms | Loss: {stats.AvgPacketLossPercent,5:F1}% ║");
                         }
 
                         Console.WriteLine("╚════════════════════════════════════════════════════════════╝\n");
@@ -340,6 +665,12 @@ namespace RemotePCControl
             isRunning = false;
             listener?.Stop();
 
+            try
+            {
+                udpStreamListener?.Close();
+            }
+            catch { }
+
             lock (lockObj)
             {
                 foreach (var client in clients)
@@ -351,6 +682,23 @@ namespace RemotePCControl
                 streamStats.Clear();
             }
         }
+    }
+
+    // ==================== UDP FRAME STRUCTURES ====================
+
+    /// <summary>
+    /// Buffer used to accumulate all UDP packets that belong to a single frame (by frame_id).
+    /// </summary>
+    public class UdpFrameBuffer
+    {
+        public int FrameId { get; set; }
+        public short TotalPackets { get; set; }
+        public DateTime FirstPacketTime { get; set; }
+        public long TimestampMs { get; set; }
+
+        public byte[][] Packets { get; set; }
+        public bool[] Received { get; set; }
+        public short ReceivedCount { get; set; }
     }
 
     public class ConnectedClient
@@ -379,6 +727,12 @@ namespace RemotePCControl
         public int FramesForwarded { get; set; }
         public DateTime StartTime { get; set; }
         public DateTime LastFrameTime { get; set; }
+
+        // Network quality statistics
+        public double AvgPingMs { get; set; } = 0;          // Average RTT (ms)
+        public double AvgPacketLossPercent { get; set; } = 0; // Average packet loss (%)
+        public int LastFrameTotalPackets { get; set; }
+        public int LastFrameReceivedPackets { get; set; }
     }
 
     class Program

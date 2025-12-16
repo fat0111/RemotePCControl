@@ -1,5 +1,5 @@
 ﻿using Microsoft.AspNetCore.SignalR;
-using RemotePCControl.WebInterface.Services; // Thêm namespace Service
+using RemotePCControl.WebInterface.Services; // Import ConnectionService namespace
 using System.Threading.Tasks;
 
 namespace RemotePCControl.WebInterface.Hubs
@@ -8,35 +8,35 @@ namespace RemotePCControl.WebInterface.Hubs
     {
         private readonly ConnectionService _connectionService;
 
-        // Inject (tiêm) Service vào Hub
+        // Inject ConnectionService into Hub
         public ControlHub(ConnectionService connectionService)
         {
             _connectionService = connectionService;
         }
 
-        // Hàm này được JavaScript gọi
+        // This method is invoked from JavaScript client
         public async Task SendCommandToServer(string commandType, string targetIp, string parameters)
         {
-            // Lấy ID của client JS đang gọi
+            // Get SignalR connection ID of the caller
             string connectionId = Context.ConnectionId;
 
-            // Xây dựng lại tin nhắn chuẩn (protocol) mà Server Console của bạn hiểu
+            // Build message in the protocol format that the TCP Server understands
 
             string message = "";
             if (commandType == "LOGIN")
             {
-                // JS gửi: "LOGIN", "192...", "12345"
-                // Server Console mong muốn: "LOGIN|192...|12345"
+                // JS sends: "LOGIN", "192...", "12345"
+                // TCP Server expects: "LOGIN|192...|12345"
                 message = $"LOGIN|{targetIp}|{parameters}";
             }
             else
             {
-                // JS gửi: "SCREENSHOT", "192...", ""
-                // Server Console mong muốn: "COMMAND|192...|SCREENSHOT|"
+                // JS sends: "SCREENSHOT", "192...", ""
+                // TCP Server expects: "COMMAND|192...|SCREENSHOT|"
                 message = $"COMMAND|{targetIp}|{commandType}|{parameters}";
             }
 
-            // Gửi lệnh này cho Service xử lý
+            // Forward this message to ConnectionService for processing
             await _connectionService.ProcessCommand(connectionId, message);
         }
 
@@ -46,7 +46,7 @@ namespace RemotePCControl.WebInterface.Hubs
             await _connectionService.ProcessCommand(connectionId, "LIST_SESSIONS");
         }
 
-        // Tự động dọn dẹp khi client JS (tab trình duyệt) bị đóng
+        // Auto cleanup when browser tab disconnects
         public override Task OnDisconnectedAsync(Exception? exception)
         {
             _connectionService.CloseConnection(Context.ConnectionId);
