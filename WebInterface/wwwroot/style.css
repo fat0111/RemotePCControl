@@ -344,6 +344,14 @@ body.overlay-active #particle-background {
 }
 
 /* Social Media Icons */
+
+:root {
+    --text-white: #ffffff;
+    --accent-green: #2ecc71;
+    --bg-dark: #1a1a1a;  
+}
+
+
 .social-icons {
     position: fixed;
     right: 30px;
@@ -351,14 +359,14 @@ body.overlay-active #particle-background {
     transform: translateY(-50%);
     display: flex;
     flex-direction: column;
-    gap: 20px;
+    gap: 15px; 
     z-index: 100;
-    font-family: 'Poppins', sans-serif;
 }
 
+
 .social-icon {
-    width: 40px;
-    height: 40px;
+    width: 45px;
+    height: 45px;
     border: 1px solid var(--text-white);
     border-radius: 50%;
     display: flex;
@@ -366,23 +374,20 @@ body.overlay-active #particle-background {
     justify-content: center;
     color: var(--text-white);
     text-decoration: none;
-    transition: all 0.3s;
-    background: transparent;
-    font-family: 'Poppins', sans-serif;
+    transition: all 0.3s ease;
+    background: rgba(255, 255, 255, 0.1); 
 }
 
 .social-icon:hover {
     border-color: var(--accent-green);
     color: var(--accent-green);
-    transform: scale(1.1);
-    font-family: 'Poppins', sans-serif;
+    transform: scale(1.1) translateX(-5px); 
+    background: rgba(46, 204, 113, 0.1);
 }
 
 .social-icon i {
-    font-size: 14px;
-    font-family: 'Poppins', sans-serif;
+    font-size: 18px; 
 }
-
 /* Scroll Indicator */
 .scroll-indicator {
     position: fixed;
